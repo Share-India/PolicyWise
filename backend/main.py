@@ -1,5 +1,6 @@
 import os
 import sys
+import urllib.parse
 import json
 import csv
 from datetime import datetime
@@ -50,13 +51,12 @@ SYNONYM_MAP = {}  # feature_name -> list of alt terms
 
 def build_synonym_map():
     global SYNONYM_MAP
-    
     csv_file = "similar features different terminologies.csv"
     if os.path.exists(csv_file):
         try:
             with open(csv_file, "r", encoding="utf-8", errors="replace") as f:
                 reader = csv.reader(f)
-                next(reader, None)  # Skip header
+                next(reader, None)
                 category_map = {}
                 for row in reader:
                     if len(row) >= 2:
@@ -66,24 +66,19 @@ def build_synonym_map():
                             if category not in category_map:
                                 category_map[category] = []
                             category_map[category].append(feature)
-                            
                 for cat, features in category_map.items():
                     if len(features) > 1:
                         primary = features[0]
                         synonyms = features[1:]
-                        if primary in SYNONYM_MAP:
-                            SYNONYM_MAP[primary].extend(synonyms)
-                        else:
-                            SYNONYM_MAP[primary] = synonyms
-            print(f"DEBUG: Loaded synonyms from {csv_file}")
+                        SYNONYM_MAP[primary] = synonyms
         except Exception as e:
-            print(f"WARNING: Failed to parse CSV for synonyms: {e}")
+            print(f"WARNING: Failed to parse synonyms CSV: {e}")
 
-    # Hard-code insurance-domain synonyms
+    # Hard-coded insurance domain synonyms
     hardcoded = {
         "Consumables & Non-Payable Cover": [
             "claim protector", "safe guard", "safeguard+", "non-payable cover",
-            "consumable cover", "non-medical expenses", "list I II III IV"
+            "consumable cover", "list I II III IV"
         ],
         "Restoration Benefit": [
             "recharge benefit", "auto restore", "automatic reinstatement",
@@ -103,22 +98,37 @@ def build_synonym_map():
         ],
         "Infinite Care": [
             "unlimited cover", "no claim limit", "infinite cover", "limitless care",
-            "unlimited sum insured", "no limit on claim"
-        ]
+            "unlimited sum insured"
+        ],
+        "Room Rent": [
+            "room rent limit", "accommodation charges", "room charges",
+            "room category", "hospital room"
+        ],
+        "ICU Charges": [
+            "icu expenses", "intensive care", "critical care unit", "icu benefit"
+        ],
+        "In Patient Hospitalization": [
+            "inpatient hospitalisation", "ipd", "in-patient expenses",
+            "hospitalisation benefit"
+        ],
+        "Day Care Treatments": [
+            "day care procedures", "daycare", "day care surgeries"
+        ],
     }
-    
     for key, syn_list in hardcoded.items():
         if key in SYNONYM_MAP:
             SYNONYM_MAP[key].extend(syn_list)
         else:
             SYNONYM_MAP[key] = syn_list
 
+    # Format as clear instructions for the LLM
     instructions = []
     for feature, synonyms in SYNONYM_MAP.items():
         unique_syns = list(dict.fromkeys([s.lower() for s in synonyms]))
         if unique_syns:
-            instructions.append(f"- {feature} is also known as: {', '.join(unique_syns).title()}")
-    
+            instructions.append(
+                f"- \"{feature}\" is also known as: {', '.join(unique_syns).title()}"
+            )
     return "\n".join(instructions)
 
 COMPULSORY_FEATURES = set() # Standard features that MUST be covered
@@ -261,51 +271,70 @@ def get_current_user(authorization: str = Header(None)):
         raise HTTPException(status_code=401, detail="Authentication failed")
 
 
+TIER_1_HIGH_CITIES = ["mumbai", "delhi", "bangalore", "bengaluru"]
+TIER_1_MID_CITIES  = ["hyderabad", "chennai", "kolkata", "pune", "ahmedabad",
+                       "gurgaon", "gurugram", "noida"]
+
 def analyze_user_profile(extracted_data):
-    """
-    Analyzes extracted data to create a user profile for specific recommendations.
-    Returns a dictionary with derived attributes.
-    """
     profile = {
         "city_tier": "Tier 2/3",
+        "recommended_si_range": "₹10L – ₹25L",
         "recommended_min_si": "10 Lakhs",
+        "healthcare_cost_level": "Moderate",
         "life_stage": "Individual",
         "family_type": "Individual"
     }
-    
-    # 1. Geography Analysis
-    city = extracted_data.get("city", "").lower().strip()
-    if any(t1 in city for t1 in TIER_1_CITIES):
-        profile["city_tier"] = "Tier 1 (Metro)"
-        profile["recommended_min_si"] = "25 Lakhs - 50 Lakhs" # Higher cost of living
-    else:
-        profile["city_tier"] = "Tier 2/3"
-        profile["recommended_min_si"] = "10 Lakhs - 25 Lakhs"
 
-    # 2. Family Composition Analysis
+    city = extracted_data.get("city", "").lower().strip()
+    if any(c in city for c in TIER_1_HIGH_CITIES):
+        profile.update({
+            "city_tier": "Tier 1 Premium Metro",
+            "recommended_si_range": "₹50L – ₹1Cr",
+            "recommended_min_si": "50 Lakhs",
+            "healthcare_cost_level": "Very High"
+        })
+    elif any(c in city for c in TIER_1_MID_CITIES):
+        profile.update({
+            "city_tier": "Tier 1 Metro",
+            "recommended_si_range": "₹25L – ₹50L",
+            "recommended_min_si": "25 Lakhs",
+            "healthcare_cost_level": "High"
+        })
+
     policy_type = extracted_data.get("coverage", "").lower()
     members = extracted_data.get("policy_holders", [])
-    
     if "floater" in policy_type or len(members) > 1:
         profile["family_type"] = "Floater / Family"
         profile["life_stage"] = "Family"
-    else:
-        profile["family_type"] = "Individual"
-        profile["life_stage"] = "Single"
 
-    # 3. Age Analysis (New)
     ages = []
-    for p in extracted_data.get("policy_holders", []):
-         try:
-             ages.append(int(p.get("age", 0)))
-         except:
-             pass
-    
+    for p in members:
+        try:
+            ages.append(int(p.get("age", 0)))
+        except:
+            pass
+
     max_age = max(ages) if ages else 30
     has_medical_history = extracted_data.get("has_medical_history", False)
-    
+
+    has_senior      = any(a >= 60 for a in ages)
+    has_middle_aged = any(50 <= a < 60 for a in ages)
+    has_child       = any(a <= 18 for a in ages)
+    has_young_adult = any(18 < a < 35 for a in ages)
+    needs_maternity = any(20 <= a <= 38 for a in ages)
+    multi_gen       = (has_senior or has_middle_aged) and (has_child or has_young_adult)
+
+    profile["family_flags"] = {
+        "has_senior": has_senior,
+        "has_middle_aged": has_middle_aged,
+        "has_child": has_child,
+        "has_young_adult": has_young_adult,
+        "needs_maternity": needs_maternity,
+        "multi_generation": multi_gen,
+    }
+
     if max_age > 55 and has_medical_history:
-        profile["age_group"] = "Senior WITH Medical History (CRITICAL: Suggest separate targeted plan emphasizing Day-1 PED cover or zero waiting period for pre-existing diseases)"
+        profile["age_group"] = "Senior WITH Medical History (CRITICAL: Suggest separate targeted plan emphasizing Day-1 PED cover)"
     elif max_age < 35:
         profile["age_group"] = "Young Adult (Prioritize: Low Premium, Wellness, Lock-in Age)"
     elif max_age < 50:
@@ -313,6 +342,21 @@ def analyze_user_profile(extracted_data):
     else:
         profile["age_group"] = "Senior (Prioritize: No Co-pay, Short Wait Periods, PED Cover)"
 
+    priority = []
+    if has_senior or has_middle_aged:
+        priority += ["PED Cover", "No Co-pay", "No Room Rent Cap"]
+    if has_child:
+        priority += ["Restoration Benefit", "Day Care Treatments"]
+    if needs_maternity:
+        priority += ["Maternity Cover", "Newborn Cover"]
+    if has_young_adult and not has_senior:
+        priority += ["No Claim Bonus", "Wellness Benefits", "Age Lock"]
+    if profile["city_tier"] in ["Tier 1 Premium Metro", "Tier 1 Metro"]:
+        priority += ["Inflation Protector", "High Sum Insured"]
+    if multi_gen:
+        priority += ["Family Floater", "Restoration Benefit"]
+
+    profile["priority_features"] = list(dict.fromkeys(priority))
     return profile
 
 
@@ -407,6 +451,79 @@ async def generate_content_with_fallback(client, contents, **kwargs):
     print("All models failed.")
     raise last_exception or Exception("All models failed")
 
+def calculate_waiting_period_status(extracted_data, features_found):
+    start_date_str = extracted_data.get("policy_details", {}).get("start_date", "")
+    start_date = parse_date(start_date_str)
+    if not start_date:
+        return {}
+
+    months_active = (datetime.now().year - start_date.year) * 12 + \
+                    (datetime.now().month - start_date.month)
+
+    def status(wait_months, served):
+        if served >= wait_months:
+            return "Cleared"
+        remaining = wait_months - served
+        y, m = divmod(remaining, 12)
+        parts = []
+        if y: parts.append(f"{y} year" + ("s" if y > 1 else ""))
+        if m: parts.append(f"{m} month" + ("s" if m > 1 else ""))
+        return f"{' '.join(parts)} remaining"
+
+    # 1. Initial waiting period (always 30 days)
+    statuses = {
+        "Initial Waiting Period": {
+            "wait_months": 1,
+            "served_months": months_active,
+            "status": status(1, months_active),
+            "affects": "All new illnesses in first 30 days"
+        }
+    }
+
+    # 2. Specific illness waiting period
+    specific_wait = 24
+    val = str(features_found.get("Specific Illness Waiting Period", "")).lower()
+    if "1 year" in val or "12 month" in val: specific_wait = 12
+    elif "2 year" in val or "24 month" in val: specific_wait = 24
+    statuses["Specific Illness Waiting Period"] = {
+        "wait_months": specific_wait,
+        "served_months": months_active,
+        "status": status(specific_wait, months_active),
+        "affects": "Cataract, Hernia, Joint Replacement, Knee Surgery, Kidney Stones"
+    }
+
+    # 3. PED waiting period
+    ped_wait = 48
+    val = str(features_found.get("Coverage of Pre-Existing Diseases", "")).lower()
+    if "2 year" in val: ped_wait = 24
+    elif "3 year" in val: ped_wait = 36
+    elif "4 year" in val: ped_wait = 48
+    elif "day 1" in val or "zero" in val: ped_wait = 0
+    statuses["Pre-Existing Disease (PED)"] = {
+        "wait_months": ped_wait,
+        "served_months": months_active,
+        "status": "Day 1 Cover" if ped_wait == 0 else status(ped_wait, months_active),
+        "affects": "Diabetes, Hypertension, Heart Disease, Thyroid, Asthma, PCOD"
+    }
+
+    # 4. Maternity waiting period
+    mat_wait = 36
+    val = str(features_found.get("Maternity", "")).lower()
+    if "9 month" in val: mat_wait = 9
+    elif "1 year" in val: mat_wait = 12
+    elif "2 year" in val: mat_wait = 24
+    elif "3 year" in val: mat_wait = 36
+    elif "4 year" in val: mat_wait = 48
+    elif "not covered" in val or "not available" in val: mat_wait = -1
+    statuses["Maternity Cover"] = {
+        "wait_months": mat_wait,
+        "served_months": months_active,
+        "status": "Not Covered" if mat_wait == -1 else status(mat_wait, months_active),
+        "affects": "Normal Delivery, C-Section, Newborn Expenses, Pre/Post Natal"
+    }
+
+    return statuses
+
 @app.post("/api/extract")
 async def extract_policy(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
     try:
@@ -498,7 +615,7 @@ async def extract_policy(file: UploadFile = File(...), user: dict = Depends(get_
         4. EXTRACT ADDRESS/LOCATION:
            - Look for the Proposer's address. Extract the **City** and **Pincode**.
         5. EXTRACT SUM INSURED BREAKDOWN:
-             - **CRITICAL**: Identify "Base Sum Insured" (A).
+             - **CRITICAL**: Identify "Base Sum Insured" (A). IF the document is a "Super Top Up" or "Top Up" policy, you MUST find the main "Sum Insured" coverage amount as a separate component distinct from the Deductible.
              - Identify "No Claim Bonus" / "Cumulative Bonus" (B).
              - **CRITICAL**: Look for "Cumulative Bonus Super" / "No Claim Bonus Super".
              - Identify "Additional Bonus" / "Recharge" (C).
@@ -506,7 +623,7 @@ async def extract_policy(file: UploadFile = File(...), user: dict = Depends(get_
              - "components": Create a list of ALL distinct positive values found.
              - Labels: "Base Sum Insured", "Cumulative Bonus", "Super No Claim Bonus", "Recharge Benefit", "Deductible".
              - Example: [{{"label": "Base Sum Insured", "value": "10,00,000"}}, {{"label": "Deductible", "value": "50,000"}}]
-             - **CRITICAL**: Do NOT include percentages. Output absolute currency AMOUNT.
+             - **CRITICAL**: Do NOT include percentages. Output absolute currency AMOUNT. If a table gives both a percentage and an amount (e.g., "Super Credit Amount = 500000" vs "Super Credit % = 100"), you MUST extract the actual currency AMOUNT ("500000"), not the percentage!
 
         Return JSON format exactly like this:
         {{ 
@@ -541,12 +658,13 @@ async def extract_policy(file: UploadFile = File(...), user: dict = Depends(get_
         You are a senior insurance auditor. Before filling the JSON, think step by step.
 
         <thinking_instructions>
-        For EACH feature in the list:
-        1. Search the ENTIRE document (base policy + add-ons + schedule page)
-        2. List every section where this feature or its synonyms appear
-        3. Note any caps, sub-limits, or exclusions
-        4. Decide: Positive / Negative / Partial
-        5. Quote the exact line
+        For EACH feature in the REFERENCE FEATURES LIST:
+        1. Search the ENTIRE document (base policy + all add-ons + schedule page + fine print)
+        2. Check synonyms from the SIMILAR TERMINOLOGIES MAPPING
+        3. Note every section where this feature or its synonyms appear
+        4. Note any caps, sub-limits, conditions, or exclusions
+        5. Decide: Positive (clear coverage), Negative (absent/excluded), Partial (capped/limited)
+        6. Extract the exact verbatim quote that proves your finding
         ONLY THEN output the JSON.
         </thinking_instructions>
 
@@ -601,17 +719,17 @@ async def extract_policy(file: UploadFile = File(...), user: dict = Depends(get_
             elif "```" in text2: text2 = text2.split("```")[1].split("```")[0].strip()
             data_p2 = json.loads(text2, strict=False)
 
-            # --- PASS 3: Contradiction Validator ---
+            # --- PASS 3: CONTRADICTION VALIDATOR ---
             try:
                 print("Running Pass 3: Contradiction Validator...", flush=True)
                 prompt_validation = f"""
 Review this extracted insurance data for contradictions.
-Check EACH feature in features_found:
-- Does the status ("Positive"/"Negative") match the verbatim_quote?
-- Example contradiction: status=Positive, value="Covered", quote="Room rent capped at 1% of SI" → WRONG
-- Fix all contradictions. Return only the corrected features_found and verbatim_quotes dicts.
+For EACH feature, check whether the value and the verbatim_quote actually agree:
+- EXAMPLE CONTRADICTION: value="Covered (No Sub-limits)", quote="Room rent capped at 1% of SI" → WRONG
+- Fix ALL contradictions. The verbatim_quote is always the source of truth.
+- Return ONLY the corrected features_found and verbatim_quotes dicts. Nothing else.
 
-Data to check:
+Data to review:
 {json.dumps({"features_found": data_p2.get("features_found", {}), "verbatim_quotes": data_p2.get("verbatim_quotes", {})})}
 """
                 res3 = await generate_content_with_fallback(client, [prompt_validation], temperature=0.0)
@@ -626,7 +744,7 @@ Data to check:
                     data_p2["verbatim_quotes"] = data_p3["verbatim_quotes"]
                 print("Pass 3 Validator completed successfully.", flush=True)
             except Exception as e:
-                print(f"WARNING: Pass 3 Validator failed: {e}", flush=True)
+                print(f"WARNING: Pass 3 Validator failed (non-critical): {e}", flush=True)
             
             # Merge JSON objects
             data = {**data_p1, **data_p2}
@@ -670,17 +788,52 @@ Data to check:
                 features_found = data.get("features_found", {})
                 verbatim_quotes = data.get("verbatim_quotes", {})
                 
+                # Create a map for robust case/plural variation matching
+                ff_lower_map = {k.strip().lower(): k for k in features_found.keys()}
+
                 for feat in COMPULSORY_FEATURES:
-                    current_val = features_found.get(feat)
-                    if not current_val or current_val == "Not Explicitly Mentioned":
-                        features_found[feat] = "Standard Cover"
-                        verbatim_quotes[feat] = "This is a standard feature/regulatory right provided by default in all IRDAI-approved health insurance policies."
+                    feat_lower = feat.strip().lower()
+                    
+                    # 1. Try exact lower match
+                    actual_key = ff_lower_map.get(feat_lower)
+                    
+                    # 2. Try common variations
+                    if not actual_key:
+                        variations = [
+                            feat_lower.rstrip('s'),
+                            feat_lower + 's',
+                            feat_lower.replace('hospitalisation', 'hospitalization'),
+                            feat_lower.replace('hospitalization', 'hospitalisation')
+                        ]
+                        for v in variations:
+                            if v in ff_lower_map:
+                                actual_key = ff_lower_map[v]
+                                break
+                                
+                    if not actual_key:
+                        actual_key = feat
+                        
+                    current_val = features_found.get(actual_key)
+                    
+                    if not current_val or str(current_val).strip() == "Not Explicitly Mentioned" or str(current_val).strip() == "N/A":
+                        features_found[actual_key] = "Standard Cover"
+                        verbatim_quotes[actual_key] = "This is a standard feature/regulatory right provided by default in all IRDAI-approved health insurance policies."
                 
                 data["features_found"] = features_found
                 data["verbatim_quotes"] = verbatim_quotes
             except Exception as e:
                 print(f"WARNING: Compulsory Features Fallback failed: {e}")
             
+            # --- NEW: WAITING PERIOD STATUS DASHBOARD ---
+            try:
+                data["waiting_period_status"] = calculate_waiting_period_status(
+                    data, 
+                    data.get("features_found", {})
+                )
+                print(f"DEBUG: Calculated Waiting Period Status for {len(data.get('waiting_period_status', {}))} categories.")
+            except Exception as e:
+                print(f"WARNING: Waiting Period Status calculation failed: {e}")
+
         except Exception as e:
             print(f"FAILED TO PARSE JSON in EXTRACT. Error: {e}")
             # Return safe default
@@ -766,7 +919,8 @@ Data to check:
                          continue # Skip adding the PDF value
 
                     if "deductible" in label:
-                        total_val -= val
+                        # Deductibles are thresholds, they do not reduce or increase the Sum Insured total.
+                        pass
                     else:
                         total_val += val
 
@@ -817,7 +971,10 @@ Data to check:
 
             # FORCE OVERWRITE: Use our calculated total from valid components
             # This fixes the issue where AI's total includes hidden/hallucinated values
-            data["sum_insured"]["total"] = format_indian_currency(total_val)
+            if total_val > 0:
+                data["sum_insured"]["total"] = format_indian_currency(total_val)
+            else:
+                data["sum_insured"]["total"] = "See Components / Not Found"
 
         # --- SUPABASE FILE UPLOAD (Only if authenticated) ---
         pdf_url = None
@@ -855,6 +1012,86 @@ Data to check:
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+def generate_admin_summary(policy_data: dict, report_data: dict, user_profile: dict) -> dict:
+    """Generates a pre-call brief for agents, highlighting flags and talking points."""
+    flags = []
+    
+    company_name = policy_data.get("company", "").lower()
+    if any(b in company_name for b in BLACKLISTED_COMPANIES):
+        flags.append("🚨 USER IS WITH A BLACKLISTED COMPANY")
+        
+    family_flags = user_profile.get("family_flags", {})
+    if family_flags.get("has_senior"):
+        flags.append("⚠️ SENIOR CITIZEN IN FAMILY (Needs separate targeted plan)")
+        
+    cost_level = user_profile.get("healthcare_cost_level", "")
+    if cost_level in ["High", "Very High"]:
+        flags.append(f"💰 HIGH TIER CITY: Recommend High SI ({user_profile.get('recommended_si_range')})")
+        
+    current_si = policy_data.get("sum_insured", {}).get("total", "Unknown")
+    premium = policy_data.get("premium", "Unknown")
+    score = report_data.get("product_score", 0)
+    
+    return {
+        "key_flags": flags,
+        "talking_points": [
+            f"Current Policy Score: {score}/10",
+            f"Current SI: {current_si} | Premium: {premium}",
+            f"Key Priorities: {', '.join(user_profile.get('priority_features', []))}"
+        ]
+    }
+
+def get_relevant_plans_subset(plans_csv: str, user_profile: dict, current_plan: dict = None, max_plans: int = 15) -> str:
+    """Filters the huge plans CSV to a smaller subset based on user profile to save LLM tokens."""
+    if not plans_csv:
+        return ""
+        
+    try:
+        reader = csv.DictReader(io.StringIO(plans_csv))
+        headers = reader.fieldnames
+        if not headers: return plans_csv
+        
+        scored_rows = []
+        is_senior = user_profile.get("family_flags", {}).get("has_senior", False)
+        is_maternity = user_profile.get("family_flags", {}).get("needs_maternity", False)
+        
+        current_plan_name = current_plan.get("Base Plan Name", "").lower() if current_plan else ""
+        current_company = current_plan.get("Insurance Company", "").lower() if current_plan else ""
+        
+        for row in reader:
+            score = 0
+            plan_name = row.get("Base Plan Name", "").lower()
+            company = row.get("Insurance Company", "").lower()
+            
+            if plan_name == current_plan_name and company == current_company:
+                scored_rows.append((100, row))
+                continue
+                
+            if any(b in company for b in BLACKLISTED_COMPANIES):
+                continue
+                
+            if is_senior and ("senior" in plan_name or "care" in plan_name or "silver" in plan_name or "red carpet" in plan_name):
+                score += 3
+            if is_maternity and ("women" in plan_name or "maternity" in plan_name or "joy" in plan_name):
+                score += 3
+                
+            if any(top in plan_name for top in ["optima", "reassure", "active", "health pre", "care supreme", "elevate"]):
+                score += 1
+                
+            scored_rows.append((score, row))
+            
+        scored_rows.sort(key=lambda x: x[0], reverse=True)
+        top_rows = [r[1] for r in scored_rows[:max_plans]]
+        
+        output = io.StringIO()
+        writer = csv.DictWriter(output, fieldnames=headers)
+        writer.writeheader()
+        writer.writerows(top_rows)
+        return output.getvalue()
+    except Exception as e:
+        print(f"DEBUG: Failed to subset plans: {e}")
+        return plans_csv
 
 @app.post("/api/compare")
 async def compare_policy(data: dict, user: dict = Depends(get_current_user)):
@@ -967,6 +1204,9 @@ async def compare_policy(data: dict, user: dict = Depends(get_current_user)):
 
         # --- STEP 2: ANALYZE PROFILE & GENERATE COMPARISON ---
         user_profile = analyze_user_profile(data)
+        
+        # --- PROMPT COMPRESSION: FILTER RELEVANT PLANS ---
+        relevant_plans_subset_csv = get_relevant_plans_subset(plans_database_csv, user_profile, current_plan=verified_row)
 
         # --- PREPARE FEATURE LIST STRING FOR PROMPT ---
         # strictly list the columns we want analyzed
@@ -1050,10 +1290,14 @@ async def compare_policy(data: dict, user: dict = Depends(get_current_user)):
         - Company: "{data.get('company')}"
         {VERIFIED_DATA_SECTION}
 
-        **USER PROFILE**:
+        **USER PROFILE** (personalize EVERY recommendation to this):
         - Age Group: {user_profile.get('age_group', 'General')}
         - Location: {data.get('city', 'Unknown')} ({user_profile['city_tier']})
-        - Family Details: {user_profile['family_type']} ({user_profile['life_stage']})
+        - Healthcare Cost Level: {user_profile.get('healthcare_cost_level', 'Moderate')}
+        - Recommended SI Range: {user_profile.get('recommended_si_range', 'Unknown')}
+        - Family: {user_profile.get('family_type', 'Individual')} ({user_profile.get('life_stage', 'Individual')})
+        - Family Flags: Senior={user_profile.get('family_flags', {}).get('has_senior')}, Child={user_profile.get('family_flags', {}).get('has_child')}, NeedsMaternity={user_profile.get('family_flags', {}).get('needs_maternity')}, MultiGen={user_profile.get('family_flags', {}).get('multi_generation')}
+        - PRIORITY FEATURES FOR THIS USER: {', '.join(user_profile.get('priority_features', []))}
         - Current Premium: {data.get('premium', 'Unknown')}
         
         **REFERENCE DATA**:
@@ -1067,7 +1311,7 @@ async def compare_policy(data: dict, user: dict = Depends(get_current_user)):
 
         - **Ref 3 (Plan Database)**: VALID Plans, Coverages, Limits. DO NOT INVENT PLANS.
         Ref 3 CSV DATA:
-        {plans_database_csv}
+        {relevant_plans_subset_csv}
 
         - **Ref 4 (USPs)**: Unique Selling Points for plans.
         Ref 4 CSV DATA:
@@ -1146,6 +1390,7 @@ async def compare_policy(data: dict, user: dict = Depends(get_current_user)):
         - **Quantity**: EXACTLY 3 distinct plans from DIFFERENT companies.
         - **Blacklist**: DO NOT recommend **Niva Bupa, Care Health, Star Health** (User Blocked).
         - **Allowed**: HDFC Ergo, ManipalCigna, Aditya Birla, SBI General, Bajaj Allianz, ICICI Lombard, Tata AIG, Future Generali.
+        - **CRITICAL RULE**: Do NOT recommend the EXACT SAME plan the user currently has! The goal is to recommend an UPGRADE or a BETTER ALTERNATIVE. Recommending their current plan '{data.get('plan', 'Unknown')}' by '{data.get('company', 'Unknown')}' is STRICTLY FORBIDDEN.
         **G. FEATURE CONSOLIDATION & WEIGHTED SCORING (CRITICAL)**:
         1. **Consolidation**: Different companies use different terms (e.g., "Claim Protector", "Safe Guard", "Safe Guard +"). You MUST consolidate these overlapping terms under the single standard `Feature` name found in "Ref 1 CSV DATA" (e.g., "Claim Protector" or "Safe Guard"). Do NOT output both if they mean the same thing. Show only 1 unified row for that benefit.
         2. **Weighted Scoring (0.0 to 1.0)**: You MUST assign a `score_weight` to EVERY feature evaluated.
@@ -1801,12 +2046,17 @@ async def compare_policy(data: dict, user: dict = Depends(get_current_user)):
                     }).execute()
 
                 print("💾 Saving complete Analysis Report to Supabase Database...")
+                
+                # --- NEW: Generate Admin Summary ---
+                admin_summary = generate_admin_summary(data, result, user_profile)
+                result["admin_summary"] = admin_summary
+                
                 insert_data = {
                     "user_id": user.get("sub"),
                     "company_name": data.get("company", "Unknown"),
                     "plan_name": data.get("plan", "Unknown"),
                     "extracted_data": data, # The original extracted policy data
-                    "report_data": result,   # The newly generated report
+                    "report_data": result,   # The newly generated report including admin summary
                     "pdf_file_url": data.get("pdf_file_url")
                 }
                 db_res = supabase_client.table("policy_analyses").insert(insert_data).execute()
@@ -1828,6 +2078,44 @@ async def compare_policy(data: dict, user: dict = Depends(get_current_user)):
         print(f"COMPARISON ERROR: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+def build_chat_context(policy_data: dict, report_data: dict) -> str:
+    """Creates a compressed summary of policy data for the chatbot's system prompt."""
+    
+    # 1. Compress Policy Data (skip huge verbatim quotes and redundant info)
+    features = policy_data.get("features_found", {})
+    clean_features = {k: v for k, v in features.items() if str(v) != "Not Explicitly Mentioned"}
+    
+    summary_policy = {
+        "company": policy_data.get("company"),
+        "plan": policy_data.get("plan"),
+        "sum_insured": policy_data.get("sum_insured", {}).get("total", "Unknown"),
+        "premium": policy_data.get("premium", "Unknown"),
+        "key_features": clean_features,
+        "waiting_periods": policy_data.get("waiting_period_status", {})
+    }
+
+    # 2. Compress Report Data (extract just the final stats and recommendations)
+    summary_report = {
+        "product_score": report_data.get("product_score", 0),
+        "pros": report_data.get("pros", []),
+        "cons": report_data.get("cons", []),
+        "recommendations": []
+    }
+    
+    for cat in report_data.get("recommendations", []):
+        cat_info = {"category": cat.get("category"), "options": []}
+        for item in cat.get("items", []):
+             cat_info["options"].append({
+                 "company": item.get("company"),
+                 "plan": item.get("name"),
+                 "premium": item.get("premium"),
+                 "primary_reason": item.get("description"),
+             })
+        summary_report["recommendations"].append(cat_info)
+
+    return f"===== COMPRESSED POLICY SUMMARY =====\n{json.dumps(summary_policy, indent=2)}\n\n===== COMPRESSED REPORT SUMMARY =====\n{json.dumps(summary_report, indent=2)}"
+
+
 @app.post("/api/chat")
 async def chat_with_report(data: dict, user: dict = Depends(get_current_user)):
     try:
@@ -1839,17 +2127,16 @@ async def chat_with_report(data: dict, user: dict = Depends(get_current_user)):
         if not user_message:
             raise HTTPException(status_code=400, detail="Message is required.")
 
+        # Compress context using new structured memory function
+        compressed_context = build_chat_context(policy_data, report_data)
+
         # Construct System Context
         system_context = f"""
         Act as PolicyWise, an expert AI health insurance advisor.
         The user has uploaded their existing policy: "{policy_data.get('company', 'Unknown')}" - "{policy_data.get('plan', 'Unknown')}".
-        You have analyzed this policy and generated a comprehensive report with recommendations.
+        Using the compressed data below, answer the user's questions.
 
-        === EXTRACTED POLICY DETAILS ===
-        {json.dumps(policy_data, indent=2, default=str) if isinstance(policy_data, dict) else str(policy_data)}
-
-        === ANALYSIS REPORT ===
-        {json.dumps(report_data, indent=2, default=str) if isinstance(report_data, dict) else str(report_data)}
+        {compressed_context}
 
         === INSTRUCTIONS ===
         1. Answer the user's question accurately based ONLY on the provided Extracted Policy Details and Analysis Report.
@@ -2024,7 +2311,8 @@ async def delete_analysis(analysis_id: str, user: dict = Depends(get_current_use
         if profile_res.data and len(profile_res.data) > 0:
             is_admin = profile_res.data[0].get("role") == "admin"
             
-        analysis_res = supabase_client.table("policy_analyses").select("user_id", "pdf_file_url").eq("id", analysis_id).execute()
+        # Select user_id and extracted_data (since pdf_file_url is stored inside JSONB)
+        analysis_res = supabase_client.table("policy_analyses").select("user_id, extracted_data").eq("id", analysis_id).execute()
         
         if not analysis_res.data:
             raise HTTPException(status_code=404, detail="Analysis not found")
@@ -2036,15 +2324,16 @@ async def delete_analysis(analysis_id: str, user: dict = Depends(get_current_use
             raise HTTPException(status_code=403, detail="Not authorized to delete this analysis")
             
         # 2. Delete file from Storage if exists
-        pdf_url = analysis.get("pdf_file_url")
+        extracted_data = analysis.get("extracted_data") or {}
+        pdf_url = extracted_data.get("pdf_file_url")
         if pdf_url:
             try:
-                # Extract path from URL: https://.../public/policy_pdfs/[path]
+                # Extract path from URL: https://[project-id].supabase.co/storage/v1/object/public/policy_pdfs/[path]
                 if "/public/policy_pdfs/" in pdf_url:
-                    path = pdf_url.split("/public/policy_pdfs/")[1]
+                    path = urllib.parse.unquote(pdf_url.split("/public/policy_pdfs/")[1])
                     print(f"🗑️ Deleting PDF from storage: {path}")
-                    supabase_client.storage.from_("policy_pdfs").remove([path])
-                    print("✅ PDF deleted from storage.")
+                    res = supabase_client.storage.from_("policy_pdfs").remove([path])
+                    print(f"✅ PDF deleted from storage.")
             except Exception as e:
                  print(f"⚠️ Failed to delete PDF from storage: {e}")
                  

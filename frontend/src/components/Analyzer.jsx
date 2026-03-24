@@ -228,7 +228,7 @@ export default function Analyzer({ session, fullName }) {
           // let's fetch it manually with auth token or adjust callBackend params.
           const { data: { session: freshSession } } = await supabase.auth.getSession();
           const token = freshSession?.access_token;
-          
+
           const chatRes = await fetch(`${API_BASE}/chats/${id}`, {
             method: 'GET',
             headers: {
@@ -236,7 +236,7 @@ export default function Analyzer({ session, fullName }) {
               'Authorization': `Bearer ${token}`
             }
           });
-          
+
           if (!chatRes.ok) throw new Error("Failed to fetch chats");
           const chatListData = await chatRes.json();
 
@@ -248,7 +248,7 @@ export default function Analyzer({ session, fullName }) {
 
             // Populate the sidebar with all analysis-linked chats
             const formattedHistoric = chatListData.map((c, idx) => ({
-              id: idx === 0 ? 'historic' : c.id, 
+              id: idx === 0 ? 'historic' : c.id,
               db_id: c.id,
               title: c.title || "Analysis Conversation",
               messages: c.chat_history || [defaultWelcome]
@@ -263,7 +263,7 @@ export default function Analyzer({ session, fullName }) {
         } catch (chatErr) {
           console.error("Failed to load chats for analysis:", chatErr);
         }
-          // Generic chats are no longer loaded here, they are loaded in a separate top-level hook.
+        // Generic chats are no longer loaded here, they are loaded in a separate top-level hook.
 
       }
     } catch (err) {
@@ -278,7 +278,7 @@ export default function Analyzer({ session, fullName }) {
   useEffect(() => {
     const fetchStandaloneChats = async () => {
       if (!session?.user?.id) return;
-      
+
       try {
         const { data: standaloneData, error: standaloneErr } = await supabase
           .from('chats')
@@ -286,7 +286,7 @@ export default function Analyzer({ session, fullName }) {
           .is('analysis_id', null)
           .eq('user_id', session.user.id)
           .order('created_at', { ascending: false });
-          
+
         if (!standaloneErr && standaloneData) {
           const formattedChats = standaloneData.map(c => ({
             id: c.id,
@@ -294,7 +294,7 @@ export default function Analyzer({ session, fullName }) {
             title: c.title || "New Conversation",
             messages: c.chat_history || [defaultWelcome]
           }));
-          
+
           setSavedChats(prev => {
             // Merge historic and standalone without duplicates
             const existingIds = prev.map(p => p.db_id);
@@ -389,27 +389,27 @@ export default function Analyzer({ session, fullName }) {
       // [PHASE 17] Update Sidebar instantly for every message to ensure visibility
       setSavedChats(prev => {
         const existingIdx = prev.findIndex(c => c.id === activeChatId);
-        
+
         const generatedTitle = prevMsgs.length === 1 ? (userMsg.length > 30 ? userMsg.substring(0, 30) + '...' : userMsg) : null;
-        const newTitle = existingIdx >= 0 ? 
-          (prev[existingIdx].title && prev[existingIdx].title !== "New Conversation" ? prev[existingIdx].title : (response.title || generatedTitle || "New Conversation")) 
+        const newTitle = existingIdx >= 0 ?
+          (prev[existingIdx].title && prev[existingIdx].title !== "New Conversation" ? prev[existingIdx].title : (response.title || generatedTitle || "New Conversation"))
           : (response.title || generatedTitle || "New Conversation");
 
         if (existingIdx >= 0) {
           const updated = [...prev];
-          updated[existingIdx] = { 
-            ...updated[existingIdx], 
-            title: newTitle, 
+          updated[existingIdx] = {
+            ...updated[existingIdx],
+            title: newTitle,
             messages: newMessages,
             db_id: response.chat_id || updated[existingIdx].db_id // Capture the UUID from backend
           };
           return updated;
         } else {
-          return [{ 
-            id: activeChatId, 
-            title: newTitle, 
+          return [{
+            id: activeChatId,
+            title: newTitle,
             messages: newMessages,
-            db_id: response.chat_id 
+            db_id: response.chat_id
           }, ...prev];
         }
       });
@@ -433,7 +433,7 @@ export default function Analyzer({ session, fullName }) {
 
   const deleteChat = async (e, chatId) => {
     e.stopPropagation();
-    
+
     const chatToDelete = savedChats.find(c => c.id === chatId);
 
     // If deleting the saved historic chat, wipe it from the database completely
@@ -468,36 +468,36 @@ export default function Analyzer({ session, fullName }) {
 
   // [PHASE 20] Save Edited Chat Title
   const handleSaveTitle = async (chatId, e) => {
-      e?.stopPropagation();
-      e?.preventDefault();
-      
-      if (!editTitleValue.trim()) {
-          setEditingChatId(null);
-          return;
-      }
+    e?.stopPropagation();
+    e?.preventDefault();
 
-      const safeTitle = editTitleValue.trim().substring(0, 50);
-
-      // 1. Update DB if it is the historic persistent chat
-      if (chatId === 'historic' && (analysisId || report?.db_analysis_id)) {
-          try {
-              const { error } = await supabase
-                  .from('chats')
-                  .update({ title: safeTitle })
-                  .eq('analysis_id', analysisId || report?.db_analysis_id);
-
-              if (error) throw error;
-          } catch (err) {
-              console.error("Failed to update chat title in DB", err);
-              // Fallthrough to update UI anyway for responsiveness
-          }
-      }
-
-      // 2. Update Local UI State
-      setSavedChats(prev => prev.map(c => c.id === chatId ? { ...c, title: safeTitle } : c));
-      
-      // Close Edit Mode
+    if (!editTitleValue.trim()) {
       setEditingChatId(null);
+      return;
+    }
+
+    const safeTitle = editTitleValue.trim().substring(0, 50);
+
+    // 1. Update DB if it is the historic persistent chat
+    if (chatId === 'historic' && (analysisId || report?.db_analysis_id)) {
+      try {
+        const { error } = await supabase
+          .from('chats')
+          .update({ title: safeTitle })
+          .eq('analysis_id', analysisId || report?.db_analysis_id);
+
+        if (error) throw error;
+      } catch (err) {
+        console.error("Failed to update chat title in DB", err);
+        // Fallthrough to update UI anyway for responsiveness
+      }
+    }
+
+    // 2. Update Local UI State
+    setSavedChats(prev => prev.map(c => c.id === chatId ? { ...c, title: safeTitle } : c));
+
+    // Close Edit Mode
+    setEditingChatId(null);
   };
 
   const [showProfileMenu, setShowProfileMenu] = useState(false);
@@ -942,7 +942,7 @@ export default function Analyzer({ session, fullName }) {
                                     )}
                                   </div>
                                 </div>
-                                {item.policy_text && (
+                                {(item.policy_text && item.policy_text !== "N/A" && item.policy_text !== "Not Explicitly Mentioned") && (
                                   <div className={`mt-3 p-3 rounded-lg border text-xs italic border-l-2 ${item.status === "Positive"
                                     ? "bg-amber-50/80 border-amber-200 text-amber-800 border-l-amber-400"
                                     : "bg-slate-100/50 border-slate-100/50 text-slate-600 border-l-slate-300"
@@ -1235,30 +1235,30 @@ export default function Analyzer({ session, fullName }) {
                           {msg.role === 'user' ? (
                             <p>{msg.text}</p>
                           ) : (
-                            <ReactMarkdown 
+                            <ReactMarkdown
                               remarkPlugins={[remarkGfm]}
                               components={{
-                                h1: ({node, ...props}) => <h1 className="font-black text-2xl text-slate-900 mt-6 mb-3" {...props} />,
-                                h2: ({node, ...props}) => <h2 className="font-bold text-xl text-slate-800 mt-5 mb-2" {...props} />,
-                                h3: ({node, ...props}) => <h3 className="font-bold text-lg text-slate-800 mt-4 mb-2" {...props} />,
-                                h4: ({node, ...props}) => <h4 className="font-bold text-base text-slate-800 mt-2 mb-1" {...props} />,
-                                h5: ({node, ...props}) => <h5 className="font-bold text-sm text-slate-800 mt-1 mb-1 uppercase tracking-wide" {...props} />,
-                                ul: ({node, ...props}) => <ul className="ml-5 list-disc space-y-0.5 my-1" {...props} />,
-                                ol: ({node, ...props}) => <ol className="ml-5 list-decimal space-y-0.5 my-1" {...props} />,
-                                li: ({node, ...props}) => <li className="pl-1 mb-0.5" {...props} />,
-                                p: ({node, ...props}) => <p className="mb-1 last:mb-0 leading-normal" {...props} />,
-                                a: ({node, ...props}) => <a className="text-indigo-600 hover:text-indigo-800 underline" target="_blank" rel="noopener noreferrer" {...props} />,
-                                strong: ({node, ...props}) => <strong className="font-bold text-slate-900" {...props} />,
-                                table: ({node, ...props}) => (
+                                h1: ({ node, ...props }) => <h1 className="font-black text-2xl text-slate-900 mt-6 mb-3" {...props} />,
+                                h2: ({ node, ...props }) => <h2 className="font-bold text-xl text-slate-800 mt-5 mb-2" {...props} />,
+                                h3: ({ node, ...props }) => <h3 className="font-bold text-lg text-slate-800 mt-4 mb-2" {...props} />,
+                                h4: ({ node, ...props }) => <h4 className="font-bold text-base text-slate-800 mt-2 mb-1" {...props} />,
+                                h5: ({ node, ...props }) => <h5 className="font-bold text-sm text-slate-800 mt-1 mb-1 uppercase tracking-wide" {...props} />,
+                                ul: ({ node, ...props }) => <ul className="ml-5 list-disc space-y-0.5 my-1" {...props} />,
+                                ol: ({ node, ...props }) => <ol className="ml-5 list-decimal space-y-0.5 my-1" {...props} />,
+                                li: ({ node, ...props }) => <li className="pl-1 mb-0.5" {...props} />,
+                                p: ({ node, ...props }) => <p className="mb-1 last:mb-0 leading-normal" {...props} />,
+                                a: ({ node, ...props }) => <a className="text-indigo-600 hover:text-indigo-800 underline" target="_blank" rel="noopener noreferrer" {...props} />,
+                                strong: ({ node, ...props }) => <strong className="font-bold text-slate-900" {...props} />,
+                                table: ({ node, ...props }) => (
                                   <div className="overflow-x-auto my-3 w-full">
                                     <table className="w-full text-sm text-left text-slate-600 border border-slate-200 rounded-lg overflow-hidden shadow-sm table-auto" {...props} />
                                   </div>
                                 ),
-                                thead: ({node, ...props}) => <thead className="text-xs text-slate-500 uppercase bg-slate-100 border-b border-slate-200" {...props} />,
-                                tbody: ({node, ...props}) => <tbody className="divide-y divide-slate-100 bg-white" {...props} />,
-                                th: ({node, ...props}) => <th className="px-3 py-2 font-bold break-words whitespace-normal align-top bg-slate-50 border-r border-slate-200 last:border-r-0" {...props} />,
-                                td: ({node, ...props}) => <td className="px-3 py-2 break-words whitespace-normal border-r border-slate-100 last:border-r-0 align-top" {...props} />,
-                                blockquote: ({node, ...props}) => <blockquote className="border-l-4 border-indigo-500 bg-indigo-50/50 pl-4 py-2 my-1 italic text-slate-700 rounded-r-lg" {...props} />
+                                thead: ({ node, ...props }) => <thead className="text-xs text-slate-500 uppercase bg-slate-100 border-b border-slate-200" {...props} />,
+                                tbody: ({ node, ...props }) => <tbody className="divide-y divide-slate-100 bg-white" {...props} />,
+                                th: ({ node, ...props }) => <th className="px-3 py-2 font-bold break-words whitespace-normal align-top bg-slate-50 border-r border-slate-200 last:border-r-0" {...props} />,
+                                td: ({ node, ...props }) => <td className="px-3 py-2 break-words whitespace-normal border-r border-slate-100 last:border-r-0 align-top" {...props} />,
+                                blockquote: ({ node, ...props }) => <blockquote className="border-l-4 border-indigo-500 bg-indigo-50/50 pl-4 py-2 my-1 italic text-slate-700 rounded-r-lg" {...props} />
                               }}
                             >
                               {msg.text}
@@ -1401,6 +1401,19 @@ export default function Analyzer({ session, fullName }) {
                         const items = comparingItem[key];
                         if (!items || items.length === 0) return null;
 
+                        const filteredItems = items.filter(row => {
+                          const p = (row.proposed || "").trim().toLowerCase();
+
+                          // Only hide if the recommended data is genuinely missing from DB for a required upgrade
+                          if (p === "n/a" || p.includes("no data") || p.includes("ref 3") || p.includes("unavailable") || p.includes("not listed")) {
+                            return false;
+                          }
+
+                          return true;
+                        });
+
+                        if (filteredItems.length === 0) return null;
+
                         const titles = {
                           non_negotiable: "Non-Negotiable Benefits",
                           must_have: "Must Have Features",
@@ -1432,60 +1445,22 @@ export default function Analyzer({ session, fullName }) {
                             </div>
 
                             <div className="divide-y divide-slate-100 bg-white">
-                              {items
-                                .filter(row => {
-                                  const e = (row.existing || "").trim().toLowerCase();
-                                  const p = (row.proposed || "").trim().toLowerCase();
-
-                                  // [NEW] Strictly hide if recommended data is missing from DB
-                                  if (p === "n/a" || p.includes("no data") || p.includes("ref 3") || p.includes("unavailable") || p.includes("not listed")) {
-                                    console.log(`Hiding ${row.feature} because proposed is missing: ${p}`);
-                                    return false;
-                                  }
-
-                                  // aggressive check for "bad" feature values
-                                  const isBad = (val) => {
-                                    if (!val) return true;
-                                    const v = val.toLowerCase().trim();
-                                    if (["no", "unknown", "n/a", "not mentioned", "not found", "not listed", "not available"].includes(v)) return true;
-                                    if (v.startsWith("no coverage")) return true;
-                                    return false;
-                                  };
-
-                                  const existingIsBad = isBad(e) || e.includes("likely capped") || e.includes("limited");
-                                  const proposedIsBad = isBad(p);
-
-                                  // remove if BOTH are bad
-                                  if (existingIsBad && proposedIsBad) {
-                                    console.log(`Hiding ${row.feature} because both are bad: ${e} vs ${p}`);
-                                    return false;
-                                  }
-
-                                  // remove if IDENTICAL
-                                  if (e === p) {
-                                    console.log(`Hiding ${row.feature} because identical: ${e}`);
-                                    return false;
-                                  }
-
-                                  console.log(`KEEPING ${row.feature}: ${e} vs ${p}`);
-                                  return true;
-                                })
-                                .map((row, i) => (
-                                  <div key={i} className="grid grid-cols-12 items-stretch text-xs">
-                                    <div className="col-span-4 p-3 bg-slate-50/30 flex items-center justify-center text-center font-bold text-slate-700 break-words">
-                                      {row.feature}
-                                    </div>
-                                    <div className="col-span-4 p-3 border-l border-slate-100 flex items-center justify-center text-center text-slate-500 font-medium break-words">
-                                      {(row.existing && row.existing.toLowerCase() === "not found") ? "Not Available" : (row.existing || <span className="italic text-slate-300">--</span>)}
-                                    </div>
-                                    <div className="col-span-4 p-3 border-l border-blue-50 bg-blue-50/10 flex items-center justify-center text-center font-bold text-blue-800 relative break-words">
-                                      {row.proposed}
-                                      {row.status === "Upgrade" && (
-                                        <span className="absolute top-1 right-1 text-[8px] bg-emerald-100 text-emerald-700 px-1 rounded font-bold uppercase tracking-wide">UPGRADE</span>
-                                      )}
-                                    </div>
+                              {filteredItems.map((row, i) => (
+                                <div key={i} className="grid grid-cols-12 items-stretch text-xs">
+                                  <div className="col-span-4 p-3 bg-slate-50/30 flex items-center justify-center text-center font-bold text-slate-700 break-words">
+                                    {row.feature}
                                   </div>
-                                ))}
+                                  <div className="col-span-4 p-3 border-l border-slate-100 flex items-center justify-center text-center text-slate-500 font-medium break-words">
+                                    {(row.existing && row.existing.toLowerCase() === "not found") ? "Not Available" : (row.existing || <span className="italic text-slate-300">--</span>)}
+                                  </div>
+                                  <div className="col-span-4 p-3 border-l border-blue-50 bg-blue-50/10 flex items-center justify-center text-center font-bold text-blue-800 relative break-words">
+                                    {row.proposed}
+                                    {row.status === "Upgrade" && (
+                                      <span className="absolute top-1 right-1 text-[8px] bg-emerald-100 text-emerald-700 px-1 rounded font-bold uppercase tracking-wide">UPGRADE</span>
+                                    )}
+                                  </div>
+                                </div>
+                              ))}
                             </div>
                           </div>
                         );
