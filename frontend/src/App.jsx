@@ -28,7 +28,6 @@ export default function App() {
             if (window.location.hash && window.location.hash.includes('type=signup')) {
                 signupHandled = true;
                 await supabase.auth.signOut();
-                // Clear the hash from the URL so it doesn't get processed again
                 window.history.replaceState(null, '', window.location.pathname);
                 alert("Email confirmed successfully! Please log in with your credentials.");
                 setSession(null);
@@ -42,37 +41,38 @@ export default function App() {
         };
 
         const checkUser = async () => {
+            console.log("DEBUG: checkUser started");
             if (await handleSignupConfirmation()) return;
 
             try {
-                const { data: { user }, error } = await supabase.auth.getUser();
-                if (error || !user) {
+                console.log("DEBUG: Awaiting supabase.auth.getSession()");
+                const { data: { session: currentSession }, error } = await supabase.auth.getSession();
+                console.log("DEBUG: getSession returned", currentSession, error);
+                
+                if (error || !currentSession) {
+                    console.log("DEBUG: No session found, forcing load false");
                     setSession(null);
                     setRole(null);
                     setFullName(null);
                     setUsername(null);
                     setLoading(false);
                 } else {
-                    const { data: { session: currentSession } } = await supabase.auth.getSession();
-                    if (currentSession) {
-                        await fetchUserData(currentSession.user.id);
-                        setSession(currentSession);
-                    } else {
-                        setSession(null);
-                        setLoading(false);
-                    }
+                    console.log("DEBUG: Awaiting fetchUserData");
+                    await fetchUserData(currentSession.user.id);
+                    setSession(currentSession);
+                    console.log("DEBUG: Session set successfully.");
                 }
             } catch (err) {
-                console.error("Initial auth check failed:", err);
+                console.error("DEBUG: Initial auth check failed completely:", err);
                 setLoading(false);
             }
         };
 
-        checkUser();
+        checkUser(); // Re-enabled using getSession() instead of getUser() to explicitly fire initial check
 
-        // Listen for auth changes
+        console.log("DEBUG: Subscribing to Auth Changes");
         const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, currentSession) => {
-            console.log("Auth Event:", event);
+            console.log("DEBUG: Auth Event:", event, currentSession);
 
             if (await handleSignupConfirmation()) return;
 
@@ -80,7 +80,7 @@ export default function App() {
                 if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION') {
                     setLoading(true);
                 }
-                // Fetch data FIRST, then set session to trigger route changes
+                console.log("DEBUG: onAuthStateChange awaiting fetchUserData");
                 await fetchUserData(currentSession.user.id);
                 setSession(currentSession);
             } else {
@@ -96,21 +96,36 @@ export default function App() {
     }, []);
 
     const fetchUserData = async (userId) => {
+        console.log("DEBUG: fetchUserData started for user", userId);
         try {
-            const { data, error } = await supabase
+            console.log("DEBUG: Awaiting profiles query with 3-second timeout fallback...");
+            
+            // Force a timeout if the Supabase client internals are infinitely deadlocked
+            const timeoutPromise = new Promise((_, reject) => 
+                setTimeout(() => reject(new Error("Supabase Database Query TIMED OUT after 3s (deadlock?)")), 3000)
+            );
+            
+            const queryPromise = supabase
                 .from('profiles')
                 .select('role, full_name, username')
                 .eq('id', userId)
                 .single();
+
+            const { data, error } = await Promise.race([queryPromise, timeoutPromise]);
+            
+            console.log("DEBUG: profiles query returned", data, error);
 
             if (data) {
                 setRole(data.role);
                 setFullName(data.full_name);
                 setUsername(data.username);
             } else {
-                // AUTO-REPAIR: If profile is missing, create it from metadata
-                console.log("Profile missing for user, attempting repair...");
-                const { data: { user } } = await supabase.auth.getUser();
+                console.log("DEBUG: Profile missing for user, attempting repair...");
+                // Wrap getUser in a timeout too to prevent it from hanging if we got here
+                const { data: { user } } = await Promise.race([
+                    supabase.auth.getUser(),
+                    new Promise(r => setTimeout(() => r({ data: { user: null } }), 1000))
+                ]);
                 if (user) {
                     const meta = user.user_metadata || {};
                     const fallbackName = meta.full_name || user.email?.split('@')[0] || "User";
@@ -123,7 +138,6 @@ export default function App() {
                             full_name: fallbackName,
                             username: fallbackUsername,
                             email: user.email,
-                            // role is omitted to respect existing database values or default to 'client'
                         }, { onConflict: 'id' })
                         .select()
                         .single();
@@ -141,9 +155,10 @@ export default function App() {
                 }
             }
         } catch (err) {
-            console.error("Error fetching/repairing user data", err);
+            console.error("DEBUG: Error fetching/repairing user data", err);
             setRole('client');
         } finally {
+            console.log("DEBUG: fetchUserData FINALLY calling setLoading(false)");
             setLoading(false);
         }
     };

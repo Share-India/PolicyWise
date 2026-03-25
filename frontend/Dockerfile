@@ -21,6 +21,9 @@ FROM nginx:alpine
 # Copy built assets to Nginx html directory
 COPY --from=build /app/dist /usr/share/nginx/html
 
+# Copy custom nginx config for React Router
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
 # Expose port (Nginx default is 80)
 EXPOSE 80
 
