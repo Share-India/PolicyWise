@@ -224,7 +224,7 @@ export default function Auth() {
 
             // Force reload to trigger App.jsx state re-evaluation
             if (!isForgotPassword) {
-                window.location.reload();
+                // window.location.reload();
             }
 
         } catch (error) {

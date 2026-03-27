@@ -16,12 +16,9 @@ export default function App() {
     const [fullName, setFullName] = useState(null);
     const [username, setUsername] = useState(null);
     const [loading, setLoading] = useState(true);
-    const initialized = useRef(false);
 
     useEffect(() => {
-        if (initialized.current) return;
-        initialized.current = true;
-
+        let mounted = true;
         let signupHandled = false;
         const handleSignupConfirmation = async () => {
             if (signupHandled) return true;
@@ -40,7 +37,7 @@ export default function App() {
             return false;
         };
 
-        const checkUser = async () => {
+        const initializeSession = async () => {
             console.log("DEBUG: checkUser started");
             if (await handleSignupConfirmation()) return;
 
@@ -49,60 +46,53 @@ export default function App() {
                 const { data: { session: currentSession }, error } = await supabase.auth.getSession();
                 console.log("DEBUG: getSession returned", currentSession, error);
                 
-                if (error || !currentSession) {
-                    console.log("DEBUG: No session found, forcing load false");
+                if (!mounted) return;
+                
+                if (currentSession && !error) {
+                    await fetchUserData(currentSession.user.id);
+                    if (mounted) setSession(currentSession);
+                } else {
+                    if (mounted) setLoading(false);
+                }
+            } catch (err) {
+                console.error("DEBUG: initial session check failed", err);
+                if (mounted) setLoading(false);
+            }
+        };
+
+        initializeSession();
+
+        const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, currentSession) => {
+            if (event === 'INITIAL_SESSION') return; // Handled reliably by initializeSession above
+            if (await handleSignupConfirmation()) return;
+
+            if (currentSession) {
+                // Background refresh shouldn't wipe the screen
+                await fetchUserData(currentSession.user.id);
+                if (mounted) setSession(currentSession);
+            } else {
+                if (mounted) {
                     setSession(null);
                     setRole(null);
                     setFullName(null);
                     setUsername(null);
                     setLoading(false);
-                } else {
-                    console.log("DEBUG: Awaiting fetchUserData");
-                    await fetchUserData(currentSession.user.id);
-                    setSession(currentSession);
-                    console.log("DEBUG: Session set successfully.");
                 }
-            } catch (err) {
-                console.error("DEBUG: Initial auth check failed completely:", err);
-                setLoading(false);
-            }
-        };
-
-        checkUser(); // Re-enabled using getSession() instead of getUser() to explicitly fire initial check
-
-        console.log("DEBUG: Subscribing to Auth Changes");
-        const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, currentSession) => {
-            console.log("DEBUG: Auth Event:", event, currentSession);
-
-            if (await handleSignupConfirmation()) return;
-
-            if (currentSession) {
-                if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION') {
-                    setLoading(true);
-                }
-                console.log("DEBUG: onAuthStateChange awaiting fetchUserData");
-                await fetchUserData(currentSession.user.id);
-                setSession(currentSession);
-            } else {
-                setSession(null);
-                setRole(null);
-                setFullName(null);
-                setUsername(null);
-                setLoading(false);
             }
         });
 
-        return () => subscription.unsubscribe();
+        return () => {
+            mounted = false;
+            subscription.unsubscribe();
+        };
     }, []);
 
     const fetchUserData = async (userId) => {
         console.log("DEBUG: fetchUserData started for user", userId);
         try {
-            console.log("DEBUG: Awaiting profiles query with 3-second timeout fallback...");
-            
-            // Force a timeout if the Supabase client internals are infinitely deadlocked
+            console.log("DEBUG: Awaiting profiles query...");
             const timeoutPromise = new Promise((_, reject) => 
-                setTimeout(() => reject(new Error("Supabase Database Query TIMED OUT after 3s (deadlock?)")), 3000)
+                setTimeout(() => reject(new Error("Supabase Database Query TIMED OUT after 5s")), 5000)
             );
             
             const queryPromise = supabase
@@ -112,7 +102,6 @@ export default function App() {
                 .single();
 
             const { data, error } = await Promise.race([queryPromise, timeoutPromise]);
-            
             console.log("DEBUG: profiles query returned", data, error);
 
             if (data) {
@@ -121,11 +110,11 @@ export default function App() {
                 setUsername(data.username);
             } else {
                 console.log("DEBUG: Profile missing for user, attempting repair...");
-                // Wrap getUser in a timeout too to prevent it from hanging if we got here
                 const { data: { user } } = await Promise.race([
                     supabase.auth.getUser(),
-                    new Promise(r => setTimeout(() => r({ data: { user: null } }), 1000))
+                    new Promise(r => setTimeout(() => r({ data: { user: null } }), 3000))
                 ]);
+                
                 if (user) {
                     const meta = user.user_metadata || {};
                     const fallbackName = meta.full_name || user.email?.split('@')[0] || "User";
