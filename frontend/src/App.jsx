@@ -1,6 +1,7 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { supabase } from './supabaseClient';
+import { Toaster, toast } from 'react-hot-toast';
 
 // Components
 import Auth from './components/Auth';
@@ -26,7 +27,7 @@ export default function App() {
                 signupHandled = true;
                 await supabase.auth.signOut();
                 window.history.replaceState(null, '', window.location.pathname);
-                alert("Email confirmed successfully! Please log in with your credentials.");
+                toast.success("Email confirmed successfully! Please log in with your credentials.");
                 setSession(null);
                 setRole(null);
                 setFullName(null);
@@ -67,8 +68,11 @@ export default function App() {
             if (await handleSignupConfirmation()) return;
 
             if (currentSession) {
-                // Background refresh shouldn't wipe the screen
-                await fetchUserData(currentSession.user.id);
+                // Only re-fetch user profile on explicit SIGNED_IN or if we somehow lack the role
+                // This prevents redundant requests during TOKEN_REFRESHED events every few minutes
+                if (event === 'SIGNED_IN' || event === 'USER_UPDATED' || !role) {
+                    await fetchUserData(currentSession.user.id);
+                }
                 if (mounted) setSession(currentSession);
             } else {
                 if (mounted) {
@@ -163,6 +167,7 @@ export default function App() {
 
     return (
         <BrowserRouter>
+            <Toaster position="top-right" />
             <Routes>
                 {/* Public / Auth Route */}
                 <Route

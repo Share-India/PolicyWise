@@ -3,10 +3,10 @@ import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { supabase } from '../supabaseClient';
-
+import { toast } from 'react-hot-toast';
 
 // --- THE API BRIDGE ---
-const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000/api";
+import { API_BASE } from '../config';
 
 const callBackend = async (endpoint, body, isFile = false, token = null) => {
   // ensure we always have a fresh token if possible
@@ -268,7 +268,7 @@ export default function Analyzer({ session, fullName }) {
       }
     } catch (err) {
       console.error("Failed to load history:", err);
-      alert("Failed to load policy analysis.");
+      toast.error("Failed to load policy analysis.");
     } finally {
       setLoading({ extracting: false, comparing: false });
     }
@@ -340,7 +340,7 @@ export default function Analyzer({ session, fullName }) {
       // Pass null to force callBackend to fetch it fresh
       const data = await callBackend("/extract", fd, true, null);
       setPolicy(data);
-    } catch (err) { alert(err.message); }
+    } catch (err) { toast.error(err.message); }
     finally { setLoading({ ...loading, extracting: false }); }
   };
 
@@ -358,7 +358,7 @@ export default function Analyzer({ session, fullName }) {
 
       // Initialize chat with a welcome message
       setChatMessages([{ role: 'ai', text: `Hello${fullName ? ' ' + fullName.split(' ')[0] : ''}! I've generated your report and saved it to your Dashboard. Do you have any specific questions about the analysis or recommendations?` }]);
-    } catch (err) { alert(err.message); }
+    } catch (err) { toast.error(err.message); }
     finally { setLoading({ ...loading, comparing: false }); }
   };
 

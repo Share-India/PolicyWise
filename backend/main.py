@@ -14,9 +14,11 @@ from google.genai import types
 import asyncio
 import io
 import difflib
+import filetype
 from supabase import create_client, Client
 
 load_dotenv(override=True)
+
 
 api_key = os.getenv("GEMINI_API_KEY")
 if not api_key:
@@ -218,13 +220,20 @@ except Exception as e:
     print(f"WARNING: Failed to load auxiliary data: {e}")
 
 
+# Security: Get allowed origins from environment, default to localhost for development
+allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173").split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
+    allow_origins=[origin.strip() for origin in allowed_origins if origin.strip()],
+    allow_credentials=True, # Allow credentials for robust auth flows
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Security: Set max upload limit (default 10MB)
+MAX_UPLOAD_SIZE_BYTES = int(os.getenv("MAX_UPLOAD_SIZE", 10 * 1024 * 1024))
+
 
 # Using models discovered via check_models.py (Prioritizing Flash models for speed)
 MODEL_CANDIDATES = [
@@ -534,6 +543,20 @@ async def extract_policy(file: UploadFile = File(...), user: dict = Depends(get_
         
         content = await file.read()
         
+        # --- SECURITY VALIDATION ---
+        # 1. Size Validation
+        if len(content) > MAX_UPLOAD_SIZE_BYTES:
+            print(f"SECURITY: File size {len(content)} exceeds limit {MAX_UPLOAD_SIZE_BYTES}")
+            raise HTTPException(status_code=413, detail=f"File too large. Maximum size is {MAX_UPLOAD_SIZE_BYTES / (1024*1024):.1f}MB.")
+            
+        # 2. Deep MIME Type Validation (Magic numbers)
+        kind = filetype.guess(content)
+        if kind is None or kind.mime != "application/pdf":
+            detected_type = kind.mime if kind else "unknown"
+            print(f"SECURITY: Rejected file type {detected_type}. Only PDFs allowed.")
+            raise HTTPException(status_code=415, detail="Invalid document format. Only valid PDF files are accepted.")
+        # ----------------------------
+
         # Read features CSV for context
         features_csv_content = FEATURES_CSV_CONTENT
         terminologies_csv_content = TERMINOLOGIES_CSV_CONTENT

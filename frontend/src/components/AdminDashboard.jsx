@@ -1,13 +1,16 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../supabaseClient';
 import { useNavigate } from 'react-router-dom';
+import { toast } from 'react-hot-toast';
+import ConfirmModal from './ConfirmModal';
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000/api";
+import { API_BASE } from '../config';
 
 export default function AdminDashboard({ session, fullName }) {
     const [analyses, setAnalyses] = useState([]);
     const [loading, setLoading] = useState(true);
     const [showProfileMenu, setShowProfileMenu] = useState(false);
+    const [deleteConfirmId, setDeleteConfirmId] = useState(null);
     const navigate = useNavigate();
 
     // avatar logic
@@ -49,13 +52,16 @@ export default function AdminDashboard({ session, fullName }) {
         window.location.href = '/login';
     };
 
-    const handleDeleteAnalysis = async (id, e) => {
+    const handleDeleteAnalysis = (id, e) => {
         e.stopPropagation(); // prevent row click if applied later
-        if (!window.confirm("Admin Action: Are you sure you want to delete this analysis permanently?")) {
-            return;
-        }
+        setDeleteConfirmId(id);
+    };
+
+    const confirmDeleteAnalysis = async () => {
+        if (!deleteConfirmId) return;
 
         try {
+            const id = deleteConfirmId;
             const { data: { session: freshSession } } = await supabase.auth.getSession();
             const token = freshSession?.access_token;
 
@@ -80,9 +86,12 @@ export default function AdminDashboard({ session, fullName }) {
 
             // Remove from local state
             setAnalyses(analyses.filter(a => a.id !== id));
+            toast.success("Analysis deleted successfully.");
         } catch (error) {
             console.error('Error deleting policy:', error.message);
-            alert("Failed to delete analysis: " + error.message);
+            toast.error("Failed to delete analysis: " + error.message);
+        } finally {
+            setDeleteConfirmId(null);
         }
     };
 
@@ -204,6 +213,14 @@ export default function AdminDashboard({ session, fullName }) {
                     </div>
                 </div>
             </div>
+            <ConfirmModal 
+                isOpen={!!deleteConfirmId}
+                title="Admin Delete Analysis"
+                message="Admin Action: Are you sure you want to delete this analysis permanently?"
+                onConfirm={confirmDeleteAnalysis}
+                onCancel={() => setDeleteConfirmId(null)}
+                confirmText="Permanently Delete"
+            />
         </div>
     );
 }

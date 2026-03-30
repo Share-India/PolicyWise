@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
+import { toast } from 'react-hot-toast';
+import ConfirmModal from './ConfirmModal';
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000/api";
+import { API_BASE } from '../config';
 
 export default function Settings({ session, fullName, username, onProfileUpdate }) {
     const navigate = useNavigate();
@@ -15,6 +17,7 @@ export default function Settings({ session, fullName, username, onProfileUpdate 
     const [firstName, setFirstName] = useState('');
     const [lastName, setLastName] = useState('');
     const [localUsername, setLocalUsername] = useState('');
+    const [showDeleteModal, setShowDeleteModal] = useState(false);
 
     // Initialize from props
     useEffect(() => {
@@ -102,10 +105,12 @@ export default function Settings({ session, fullName, username, onProfileUpdate 
         }
     };
 
-    const handleDeleteAccount = async () => {
-        const confirmed = window.confirm("Are you absolutely sure you want to delete your account? This action is permanent and will delete all your policy analyses and chat history.");
-        if (!confirmed) return;
+    const handleDeleteAccount = () => {
+        setShowDeleteModal(true);
+    };
 
+    const confirmDeleteAccount = async () => {
+        setShowDeleteModal(false);
         setLoading(true);
         setDeleteError(null);
 
@@ -132,7 +137,7 @@ export default function Settings({ session, fullName, username, onProfileUpdate 
             localStorage.clear();
             sessionStorage.clear();
 
-            alert("Your account has been deleted successfully.");
+            toast.success("Your account has been deleted successfully.");
             window.location.href = '/login';
         } catch (err) {
             setDeleteError(err.message);
@@ -262,6 +267,14 @@ export default function Settings({ session, fullName, username, onProfileUpdate 
                     </button>
                 </div>
             </div>
+            <ConfirmModal 
+                isOpen={showDeleteModal}
+                title="Delete Account"
+                message={`Are you absolutely sure you want to delete your account?\n\nThis action is permanent and will delete all your policy analyses and chat history.`}
+                onConfirm={confirmDeleteAccount}
+                onCancel={() => setShowDeleteModal(false)}
+                confirmText="Yes, delete my account"
+            />
         </div>
     );
 }
