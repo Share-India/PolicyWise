@@ -146,7 +146,15 @@ export default function Auth() {
                 const { error } = await supabase.auth.signInWithPassword({ email: resolvedEmail, password });
                 if (error) throw error;
 
-                toast.success('Successfully signed in!', { duration: 3000 });
+                toast.success('Successfully signed in! Redirecting...', { duration: 2000 });
+                
+                // Force a hard redirect to bypass any router race conditions with the auth event listener
+                setTimeout(() => {
+                    window.location.href = "/dashboard";
+                }, 800);
+                
+                // Prevent finally block from turning off the spinner too early
+                return;
 
             } else if (!isLogin && !isForgotPassword) {
                 if (!firstName.trim() || !lastName.trim() || !username.trim()) {
