@@ -156,6 +156,7 @@ export default function Auth() {
                     email,
                     password,
                     options: {
+                        emailRedirectTo: window.location.origin,
                         data: {
                             full_name: `${firstName} ${lastName}`.trim(),
                             username: username.trim()
