@@ -32,7 +32,7 @@ export default function AdminDashboard({ session, fullName }) {
                 .from('policy_analyses')
                 .select(`
                     *,
-                    profiles(email, full_name)
+                    profiles(email, full_name, phone)
                 `)
                 .order('created_at', { ascending: false });
 
@@ -150,11 +150,12 @@ export default function AdminDashboard({ session, fullName }) {
                         <table className="w-full text-left whitespace-nowrap">
                             <thead className="bg-slate-50/50 text-slate-400 uppercase text-[10px] font-black tracking-widest">
                                 <tr>
-                                    <th className="px-4 py-4 w-[15%]">Date</th>
-                                    <th className="px-4 py-4 w-[20%]">Client User</th>
+                                    <th className="px-4 py-4 w-[12%]">Date</th>
+                                    <th className="px-4 py-4 w-[22%]">Client User</th>
+                                    <th className="px-4 py-4 w-[14%]">Phone</th>
                                     <th className="px-4 py-4 w-[1%] whitespace-nowrap">Company</th>
                                     <th className="px-4 py-4 w-[25%]">Plan Name</th>
-                                    <th className="px-4 py-4 w-[15%]">AI Score</th>
+                                    <th className="px-4 py-4 w-[12%]">AI Score</th>
                                     <th className="px-4 py-4 w-[10%] text-center">Actions</th>
                                 </tr>
                             </thead>
@@ -171,6 +172,20 @@ export default function AdminDashboard({ session, fullName }) {
                                                 <span className="text-sm font-bold text-slate-700">{a.profiles?.full_name || 'N/A'}</span>
                                                 <span className="text-[10px] text-slate-400 font-medium uppercase tracking-tighter opacity-70">{a.profiles?.email}</span>
                                             </div>
+                                        </td>
+                                        <td className="px-4 py-4">
+                                            {a.profiles?.phone ? (
+                                                <a
+                                                    href={`tel:${a.profiles.phone.replace(/\s/g, '')}`}
+                                                    className="flex items-center gap-1.5 text-sm font-bold text-emerald-700 hover:text-emerald-500 transition group w-fit"
+                                                    title="Click to call"
+                                                >
+                                                    <span className="bg-emerald-100 group-hover:bg-emerald-200 text-emerald-600 px-1.5 py-0.5 rounded text-[10px] transition">📞</span>
+                                                    {a.profiles.phone}
+                                                </a>
+                                            ) : (
+                                                <span className="text-slate-300 text-xs italic">Not provided</span>
+                                            )}
                                         </td>
                                         <td className="px-4 py-4 text-sm text-slate-500 font-medium">{a.company_name}</td>
                                         <td className="px-4 py-4 text-sm font-black text-slate-800">{a.plan_name}</td>

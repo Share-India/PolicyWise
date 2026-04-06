@@ -1,8 +1,20 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from '../supabaseClient';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'react-hot-toast';
-import { Eye, EyeOff, User, Mail, Lock, ShieldCheck, Zap, Activity, FileSearch } from 'lucide-react';
+import { Eye, EyeOff, User, Mail, Lock, ShieldCheck, Zap, Activity, FileSearch, Phone } from 'lucide-react';
+
+const countryList = [
+    { code: '+91', flag: '🇮🇳', name: 'India' },
+    { code: '+1', flag: '🇺🇸', name: 'United States' },
+    { code: '+44', flag: '🇬🇧', name: 'United Kingdom' },
+    { code: '+61', flag: '🇦🇺', name: 'Australia' },
+    { code: '+81', flag: '🇯🇵', name: 'Japan' },
+    { code: '+86', flag: '🇨🇳', name: 'China' },
+    { code: '+49', flag: '🇩🇪', name: 'Germany' },
+    { code: '+33', flag: '🇫🇷', name: 'France' },
+    { code: '+971', flag: '🇦🇪', name: 'United Arab Emirates' },
+];
 
 export default function Auth() {
     const [loading, setLoading] = useState(false);
@@ -11,6 +23,7 @@ export default function Auth() {
     const [showPassword, setShowPassword] = useState(false); // New Phase 1 Fix
     const [firstName, setFirstName] = useState('');
     const [lastName, setLastName] = useState('');
+    const [dropdownRef] = [useRef(null)]; // Unused but kept to avoid breaking refs
     const [username, setUsername] = useState('');
     const [loginUsername, setLoginUsername] = useState('');
     const [isLogin, setIsLogin] = useState(true);
@@ -126,55 +139,106 @@ export default function Auth() {
         return () => clearTimeout(delayDebounceFn);
     }, [email, isLogin]);
 
+    const handleKeyDown = (e) => {
+        if (e.key === 'Enter') {
+            const form = e.currentTarget;
+            const submitButton = form.querySelector('button[type="submit"]');
+
+            const elements = Array.from(form.elements).filter(el => 
+                (el.tagName === 'INPUT' || el.tagName === 'BUTTON') && !el.disabled
+            );
+            
+            const index = elements.indexOf(e.target);
+            
+            let nextInput = null;
+            if (index > -1) {
+                for (let i = index + 1; i < elements.length; i++) {
+                    if (elements[i].tagName === 'INPUT' && !elements[i].disabled) {
+                        nextInput = elements[i];
+                        break;
+                    }
+                }
+            }
+
+            if (nextInput) {
+                e.preventDefault();
+                nextInput.focus();
+            } else {
+                // We are on the last input. Trigger the submit button manually if it's ready.
+                e.preventDefault();
+                if (submitButton && !submitButton.disabled) {
+                    submitButton.click();
+                }
+            }
+        }
+    };
+
     const handleAuth = async (e) => {
         e.preventDefault();
         setLoading(true);
 
         try {
             if (isLogin && !isForgotPassword) {
-                // 1. Resolve Username -> Email securely
-                setIsResolvingUsername(true);
-                const { data: resolvedEmail, error: lookupError } = await supabase.rpc('get_email_by_username', {
-                    lookup_username: loginUsername.trim()
-                });
-                setIsResolvingUsername(false);
+                const loginInput = loginUsername.trim();
+                const isEmail = loginInput.includes('@');
+                let resolvedEmail = loginInput;
 
-                if (lookupError) throw lookupError;
-                if (!resolvedEmail) throw new Error("Invalid username or password."); // Vague error
+                if (!isEmail) {
+                    // Treat as username — resolve to email via RPC
+                    setIsResolvingUsername(true);
+                    const { data, error: lookupError } = await supabase.rpc('get_email_by_username', {
+                        lookup_username: loginInput
+                    });
+                    setIsResolvingUsername(false);
 
-                // 2. Sign in with the resolved email
+                    if (lookupError) throw lookupError;
+                    if (!data) throw new Error("Invalid username or password.");
+                    resolvedEmail = data;
+                }
+
+                // Sign in with the resolved (or directly provided) email
                 const { error } = await supabase.auth.signInWithPassword({ email: resolvedEmail, password });
                 if (error) throw error;
 
                 toast.success('Successfully signed in! Redirecting...', { duration: 2000 });
-                
+
                 // Force a hard redirect to bypass any router race conditions with the auth event listener
                 setTimeout(() => {
                     window.location.href = "/dashboard";
                 }, 800);
-                
+
                 // Prevent finally block from turning off the spinner too early
                 return;
 
             } else if (!isLogin && !isForgotPassword) {
-                if (!firstName.trim() || !lastName.trim() || !username.trim()) {
-                    throw new Error("First Name, Surname, and Username are required for sign up.");
+                if (!email.trim() || !password.trim() || !username.trim() || !firstName.trim() || !lastName.trim()) {
+                    throw new Error('All fields are required to complete signup.');
                 }
-                const { error } = await supabase.auth.signUp({
+                if (usernameError || emailError) {
+                    throw new Error('Please fix the errors before proceeding.');
+                }
+                
+                // Directly call signUp to perfectly trigger the native "Confirm Sign Up" template
+                const { error: signUpError } = await supabase.auth.signUp({
                     email,
                     password,
                     options: {
-                        emailRedirectTo: window.location.origin,
                         data: {
+                            username: username.trim(),
                             full_name: `${firstName} ${lastName}`.trim(),
-                            username: username.trim()
+                            role: 'client'
                         }
                     }
                 });
-                if (error) throw error;
-                toast.success('Signup successful! Check your email if confirmation is required.', { duration: 6000 });
-                setIsLogin(true);
-                setPassword('');
+                
+                if (signUpError) throw signUpError;
+
+                toast.success('Account created! ✉️ A confirmation link has been sent to your email. Please click it to verify your account and log in.', { duration: 8000 });
+                
+                // Switch back to the login tab layout
+                setTimeout(() => {
+                    setIsLogin(true);
+                }, 2000);
             }
         } catch (error) {
             let msg = error.message;
@@ -182,6 +246,8 @@ export default function Auth() {
                 msg = "Invalid username or password.";
             } else if (!isLogin && msg.toLowerCase().includes('profiles_username_key')) {
                 msg = "Username already exists. Please choose a different one!";
+            } else if (msg.toLowerCase().includes('email rate limit') || msg.toLowerCase().includes('rate limit exceeded')) {
+                msg = "Too many signup attempts right now. Please wait a few minutes and try again.";
             }
             toast.error(msg);
         } finally {
@@ -331,7 +397,7 @@ export default function Auth() {
 
                     {/* FORGOT PASSWORD VIEW */}
                     {isForgotPassword ? (
-                        <form className="space-y-5" onSubmit={handleResetPassword}>
+                        <form className="space-y-5" onSubmit={handleResetPassword} onKeyDown={handleKeyDown}>
                             <div>
                                 <label className="block text-sm font-medium text-slate-700 mb-1">Account Username</label>
                                 <div className="relative group">
@@ -367,11 +433,11 @@ export default function Auth() {
                         </form>
                     ) : (
                         // LOGIN & SIGN UP VIEW
-                        <form className="space-y-5" onSubmit={handleAuth}>
+                        <form className="space-y-5" onSubmit={handleAuth} onKeyDown={handleKeyDown}>
 
-                            {/* SIGN UP ONLY FIELDS */}
+                            {/* SIGN UP - FULL FORM */}
                             {!isLogin && (
-                                <div className="space-y-5">
+                                <div className="space-y-5" style={{ animation: 'slideUp 0.3s ease-out forwards' }}>
                                     <div>
                                         <label className="block text-sm font-medium text-slate-700 mb-1">Username</label>
                                         <div className="relative group">
@@ -379,7 +445,8 @@ export default function Auth() {
                                                 <User className="w-5 h-5" />
                                             </div>
                                             <input
-                                                type="text" required value={username} onChange={(e) => setUsername(e.target.value)}
+                                                type="text" required value={username} 
+                                                onChange={(e) => setUsername(e.target.value.replace(/[^a-zA-Z0-9_]/g, ''))}
                                                 placeholder="Choose a username"
                                                 className={`appearance-none block w-full pl-10 pr-3 py-3 border rounded-xl focus:outline-none focus:ring-2 transition-all sm:text-sm ${usernameError ? 'border-rose-300 bg-rose-50 focus:ring-rose-500' : 'border-slate-200 bg-slate-50 focus:bg-white focus:ring-blue-500'}`}
                                             />
@@ -391,22 +458,23 @@ export default function Auth() {
                                         <div>
                                             <label className="block text-sm font-medium text-slate-700 mb-1">First Name</label>
                                             <input
-                                                type="text" required value={firstName} onChange={(e) => setFirstName(e.target.value)}
-                                                placeholder="John"
+                                                type="text" required value={firstName} 
+                                                onChange={(e) => setFirstName(e.target.value.replace(/[^a-zA-Z\s-]/g, ''))}
+                                                placeholder="John" 
                                                 className="appearance-none block w-full px-3 py-3 border border-slate-200 rounded-xl bg-slate-50 focus:bg-white text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all sm:text-sm"
                                             />
                                         </div>
                                         <div>
                                             <label className="block text-sm font-medium text-slate-700 mb-1">Surname</label>
                                             <input
-                                                type="text" required value={lastName} onChange={(e) => setLastName(e.target.value)}
+                                                type="text" required value={lastName} 
+                                                onChange={(e) => setLastName(e.target.value.replace(/[^a-zA-Z\s-]/g, ''))}
                                                 placeholder="Doe"
                                                 className="appearance-none block w-full px-3 py-3 border border-slate-200 rounded-xl bg-slate-50 focus:bg-white text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all sm:text-sm"
                                             />
                                         </div>
                                     </div>
 
-                                    {/* Email field for Sign Up */}
                                     <div>
                                         <label className="block text-sm font-medium text-slate-700 mb-1">Email address</label>
                                         <div className="relative group">
@@ -415,76 +483,97 @@ export default function Auth() {
                                             </div>
                                             <input
                                                 type="email" required value={email} onChange={(e) => setEmail(e.target.value)}
-                                                placeholder="you@company.com"
+                                                placeholder="you@example.com"
                                                 className={`appearance-none block w-full pl-10 pr-3 py-3 border rounded-xl focus:outline-none focus:ring-2 transition-all sm:text-sm ${emailError ? 'border-rose-300 bg-rose-50 focus:ring-rose-500' : 'border-slate-200 bg-slate-50 focus:bg-white focus:ring-blue-500'}`}
                                             />
                                         </div>
-                                        {!isLogin && isValidatingEmail && <div className="text-xs text-slate-500 mt-1 flex items-center gap-1"><div className="w-3 h-3 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div> Checking email...</div>}
-                                        {!isLogin && emailError && <div className="text-xs text-rose-600 mt-1.5 font-medium">{emailError}</div>}
+                                        {isValidatingEmail && <div className="text-xs text-slate-500 mt-1 flex items-center gap-1"><div className="w-3 h-3 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div> Checking email...</div>}
+                                        {emailError && <div className="text-xs text-rose-600 mt-1.5 font-medium">{emailError}</div>}
+                                    </div>
+
+                                    <div>
+                                        <div className="flex justify-between items-center mb-1">
+                                            <label className="block text-sm font-medium text-slate-700">Password</label>
+                                        </div>
+                                        <div className="relative group">
+                                            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400 group-focus-within:text-blue-500 transition-colors">
+                                                <Lock className="w-5 h-5" />
+                                            </div>
+                                            <input
+                                                type={showPassword ? "text" : "password"}
+                                                required value={password} onChange={(e) => setPassword(e.target.value)}
+                                                placeholder="Min. 6 characters"
+                                                className="appearance-none block w-full pl-10 pr-10 py-3 border border-slate-200 rounded-xl bg-slate-50 focus:bg-white text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all sm:text-sm"
+                                            />
+                                            <div className="absolute inset-y-0 right-0 pr-3 flex items-center">
+                                                <button type="button" className="text-slate-400 hover:text-slate-600 focus:outline-none" onClick={() => setShowPassword(!showPassword)}>
+                                                    {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                                                </button>
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
                             )}
 
-                            {/* USERNAME FIELD FOR LOGIN ONLY */}
-                            {isLogin ? (
-                                <div>
-                                    <label className="block text-sm font-medium text-slate-700 mb-1">Username</label>
-                                    <div className="relative group">
-                                        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400 group-focus-within:text-blue-500 transition-colors">
-                                            <User className="w-5 h-5" />
+                            {/* LOGIN FIELDS */}
+                            {isLogin && (
+                                <div className="space-y-5">
+                                    {/* USERNAME OR EMAIL FIELD */}
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-700 mb-1">Username or Email</label>
+                                        <div className="relative group">
+                                            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400 group-focus-within:text-blue-500 transition-colors">
+                                                {loginUsername.includes('@') ? <Mail className="w-5 h-5" /> : <User className="w-5 h-5" />}
+                                            </div>
+                                            <input
+                                                type="text" required value={loginUsername} onChange={(e) => setLoginUsername(e.target.value)}
+                                                placeholder="Enter your username or email"
+                                                className="appearance-none block w-full pl-10 pr-3 py-3 border border-slate-200 rounded-xl bg-slate-50 focus:bg-white text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all sm:text-sm"
+                                            />
                                         </div>
-                                        <input
-                                            type="text" required value={loginUsername} onChange={(e) => setLoginUsername(e.target.value)}
-                                            placeholder="Enter your username"
-                                            className="appearance-none block w-full pl-10 pr-3 py-3 border border-slate-200 rounded-xl bg-slate-50 focus:bg-white text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all sm:text-sm"
-                                        />
                                     </div>
-                                </div>
-                            ) : null}
 
-                            {/* PASSWORD FIELD */}
-                            <div>
-                                <div className="flex justify-between items-center mb-1">
-                                    <label className="block text-sm font-medium text-slate-700">Password</label>
-                                    {isLogin && (
-                                        <button type="button" onClick={() => setIsForgotPassword(true)} className="text-sm font-semibold text-blue-600 hover:text-blue-500 transition-colors">
-                                            Forgot password?
-                                        </button>
-                                    )}
-                                </div>
-                                <div className="relative group">
-                                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400 group-focus-within:text-blue-500 transition-colors">
-                                        <Lock className="w-5 h-5" />
-                                    </div>
-                                    <input
-                                        type={showPassword ? "text" : "password"}
-                                        required value={password} onChange={(e) => setPassword(e.target.value)}
-                                        placeholder="••••••••"
-                                        className="appearance-none block w-full pl-10 pr-10 py-3 border border-slate-200 rounded-xl bg-slate-50 focus:bg-white text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all sm:text-sm"
-                                    />
-                                    <div className="absolute inset-y-0 right-0 pr-3 flex items-center">
-                                        <button
-                                            type="button"
-                                            className="text-slate-400 hover:text-slate-600 focus:outline-none"
-                                            onClick={() => setShowPassword(!showPassword)}
-                                        >
-                                            {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
-                                        </button>
+                                    {/* PASSWORD FIELD */}
+                                    <div>
+                                        <div className="flex justify-between items-center mb-1">
+                                            <label className="block text-sm font-medium text-slate-700">Password</label>
+                                            <button type="button" onClick={() => setIsForgotPassword(true)} className="text-sm font-semibold text-blue-600 hover:text-blue-500 transition-colors">
+                                                Forgot password?
+                                            </button>
+                                        </div>
+                                        <div className="relative group">
+                                            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400 group-focus-within:text-blue-500 transition-colors">
+                                                <Lock className="w-5 h-5" />
+                                            </div>
+                                            <input
+                                                type={showPassword ? "text" : "password"}
+                                                required value={password} onChange={(e) => setPassword(e.target.value)}
+                                                placeholder="••••••••"
+                                                className="appearance-none block w-full pl-10 pr-10 py-3 border border-slate-200 rounded-xl bg-slate-50 focus:bg-white text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all sm:text-sm"
+                                            />
+                                            <div className="absolute inset-y-0 right-0 pr-3 flex items-center">
+                                                <button type="button" className="text-slate-400 hover:text-slate-600 focus:outline-none" onClick={() => setShowPassword(!showPassword)}>
+                                                    {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                                                </button>
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
-                            </div>
+                            )}
 
+                            {/* MAIN BUTTON ACTIONS */}
                             <div className="pt-2">
                                 <button
-                                    type="submit" disabled={loading || (!isLogin && (usernameError || emailError))}
+                                    type="submit" 
+                                    disabled={loading || (isLogin ? !loginUsername.trim() || !password.trim() : (password.length < 6 || !email.trim() || !!emailError || !!usernameError || !firstName.trim() || !lastName.trim()))}
                                     className="w-full flex justify-center py-3 px-4 shadow-md rounded-xl text-sm font-bold text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all hover:-translate-y-0.5"
                                 >
                                     {loading ? (
                                         <span className="flex items-center gap-2">
                                             <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                                            {isLogin ? (isResolvingUsername ? 'Resolving Username...' : 'Authenticating...') : 'Creating account...'}
+                                            {isLogin ? (isResolvingUsername ? 'Resolving Username...' : 'Authenticating...') : 'Creating Account...'}
                                         </span>
-                                    ) : (isLogin ? 'Sign In' : 'Create Account')}
+                                    ) : (isLogin ? 'Sign In' : 'Sign Up')}
                                 </button>
                             </div>
                         </form>

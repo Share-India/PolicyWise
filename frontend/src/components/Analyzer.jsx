@@ -45,12 +45,27 @@ const callBackend = async (endpoint, body, isFile = false, token = null) => {
   return res.json();
 };
 
+// --- HELPER: PERSONALIZATION ---
+const getTargetName = (policy) => {
+  if (policy && policy.policy_holders && policy.policy_holders.length > 0 && policy.policy_holders[0].name) {
+    const rawName = policy.policy_holders[0].name.split(' ')[0];
+    return rawName.charAt(0).toUpperCase() + rawName.slice(1).toLowerCase();
+  }
+  return 'You';
+};
+
+const getTargetPossessive = (policy) => {
+  const name = getTargetName(policy);
+  if (name === 'You' || name === 'Your') return 'Your';
+  return name.endsWith('s') ? `${name}'` : `${name}'s`;
+};
+
 // --- HELPER: SUM INSURED ANALYSIS ---
 const SI_ANALYSIS_DATA = [
   {
     max: 10,
     status: "❌ Very Low Coverage",
-    range_desc: "Your coverage is under ₹10 Lakhs.",
+    range_desc: (policy) => `${getTargetPossessive(policy)} coverage is under ₹10 Lakhs.`,
     reality: (policy) => {
       const isFamily = policy.policy_holders && policy.policy_holders.length > 1;
       const who = isFamily ? "your family" : "an individual";
@@ -65,7 +80,7 @@ const SI_ANALYSIS_DATA = [
   {
     max: 25,
     status: "⚠️ Basic to Moderate Coverage",
-    range_desc: "Your coverage is between ₹10 Lakhs - ₹25 Lakhs.",
+    range_desc: (policy) => `${getTargetPossessive(policy)} coverage is between ₹10 Lakhs - ₹25 Lakhs.`,
     reality: (policy) => {
       const isFamily = policy.policy_holders && policy.policy_holders.length > 1;
       const familySize = policy.policy_holders?.length || 1;
@@ -89,7 +104,7 @@ const SI_ANALYSIS_DATA = [
   {
     max: 50,
     status: "✅ Ideal & Recommended Coverage",
-    range_desc: "Your coverage is between ₹25 Lakhs - ₹50 Lakhs.",
+    range_desc: (policy) => `${getTargetPossessive(policy)} coverage is between ₹25 Lakhs - ₹50 Lakhs.`,
     reality: (policy) => {
       const isFamily = policy.policy_holders && policy.policy_holders.length > 1;
       const who = isFamily ? "your family" : "you";
@@ -104,7 +119,7 @@ const SI_ANALYSIS_DATA = [
   {
     max: 9999, // > 50L
     status: "⭐ Optimal / Future-Ready Coverage",
-    range_desc: "Your coverage is above ₹50 Lakhs.",
+    range_desc: (policy) => `${getTargetPossessive(policy)} coverage is above ₹50 Lakhs.`,
     reality: (policy) => {
       const isFamily = policy.policy_holders && policy.policy_holders.length > 1;
       const subject = isFamily ? "your family" : "you";
@@ -186,6 +201,7 @@ export default function Analyzer({ session, fullName }) {
   const [editingChatId, setEditingChatId] = useState(null); // [PHASE 20] Edit UI state
   const [editTitleValue, setEditTitleValue] = useState(""); // [PHASE 20] Title text state
   const [isReadOnly, setIsReadOnly] = useState(false); // [PHASE 21] Read-only mode for admins
+  const [expandedCategories, setExpandedCategories] = useState({}); // Accordion state for feature analysis
   const chatEndRef = useRef(null);
 
   const fileRef = useRef();
@@ -572,8 +588,28 @@ export default function Analyzer({ session, fullName }) {
 
       <main className={`max-w-6xl mx-auto py-12 px-6 ${comparingItem ? 'print:hidden' : ''}`}>
 
+        {/* [NEW] Print-Only Header */}
+        <div className="hidden print:grid grid-cols-3 items-center border-b-2 border-slate-200 pb-6 mb-8">
+           <div className="flex justify-start">
+               <img src="/logo3.png" alt="Share India" className="h-12 object-contain" />
+           </div>
+           <div className="text-center">
+               <h1 className="text-3xl font-black text-slate-800 mb-1">PolicyWise</h1>
+               <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Smart AI Insurance Analysis</p>
+           </div>
+           <div className="flex justify-end">
+               <div className="text-right bg-slate-50 px-4 py-2 rounded-xl border border-slate-100 inline-block">
+                 <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Support Contact</p>
+                 <div className="flex items-center gap-2 text-slate-800 font-black justify-end">
+                   <span className="text-sm">📞</span>
+                   <span>1800-210-2022</span>
+                 </div>
+               </div>
+           </div>
+        </div>
+
         {/* [NEW] Centered Heading */}
-        <div className="text-center mb-10">
+        <div className="text-center mb-10 print:hidden">
           <h1 className="text-4xl font-black bg-clip-text text-transparent bg-gradient-to-r from-blue-500 to-indigo-500 mb-2 pb-1 leading-normal">PolicyWise</h1>
           <p className="text-slate-500 font-medium">Smart AI Insurance Analysis</p>
         </div>
@@ -673,7 +709,41 @@ export default function Analyzer({ session, fullName }) {
                   {/* Total */}
                   <div className="border-t border-slate-300 pt-2 mt-2 flex justify-between items-center">
                     <span className="text-sm font-bold text-slate-700">Total Sum Insured:</span>
-                    <span className="text-xl font-black text-slate-900">{policy.sum_insured?.total || "---"}</span>
+                    <span className="text-xl font-black text-slate-900">
+                      {(() => {
+                        let total = policy.sum_insured?.total || "---";
+                        const components = policy.sum_insured?.components || [];
+                        let additiveTotal = 0;
+                        let subtractiveTotal = 0;
+                        let hasComponents = false;
+                        
+                        for (const comp of components) {
+                            if (!comp.value || !comp.label) continue;
+                            const val = parseFloat(comp.value.replace(/[^0-9.]/g, '')) || 0;
+                            const label = comp.label.toLowerCase();
+                            
+                            if (val > 0) {
+                                hasComponents = true;
+                                // Structurally subtract deductibles
+                                if (label.includes('deductible') || label.includes('co-pay')) {
+                                    subtractiveTotal += val;
+                                } else {
+                                    // Add all other benefits (Base Sum Insured, NCB, Recharge, Bonuses)
+                                    additiveTotal += val;
+                                }
+                            }
+                        }
+                        
+                        if (hasComponents) {
+                            const finalDynamicTotal = additiveTotal - subtractiveTotal;
+                            // Ensure the total makes sense, then override the AI's plain text prediction
+                            if (finalDynamicTotal > 0) {
+                                return finalDynamicTotal.toLocaleString('en-IN');
+                            }
+                        }
+                        return total;
+                      })()}
+                    </span>
                   </div>
                 </div>
               </div>
@@ -717,7 +787,7 @@ export default function Analyzer({ session, fullName }) {
                 disabled={!policy.company || loading.comparing || (hasSeniorCitizen(policy) && policy.has_medical_history === undefined)}
                 className="w-full mt-8 mb-6 bg-gradient-to-r from-blue-600 to-indigo-600 text-white py-4 rounded-xl font-bold uppercase text-sm tracking-widest hover:from-blue-700 hover:to-indigo-700 hover:shadow-lg hover:shadow-indigo-200 transition transform hover:-translate-y-0.5 disabled:opacity-70 disabled:cursor-not-allowed print:hidden"
               >
-                {loading.comparing ? "Analyzing Market & Saving to Database..." : "Generate Analysis Report"}
+                {loading.comparing ? "Generating Report..." : "Generate Analysis Report"}
               </button>
             )}
           </div>
@@ -743,7 +813,7 @@ export default function Analyzer({ session, fullName }) {
 
                 {/* Header Section */}
                 <div className={`${theme.bg} px-8 py-6 border-b ${theme.border}`}>
-                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                  <div className="flex flex-col md:flex-row md:items-center print:flex-row print:items-center justify-between gap-4">
                     <div>
                       <div className="flex items-center gap-3 mb-2">
                         <span className="text-2xl">{theme.icon}</span>
@@ -752,7 +822,7 @@ export default function Analyzer({ session, fullName }) {
                       <p className={`text-sm font-bold uppercase tracking-wider opacity-70 ${theme.text}`}>Current Coverage Status</p>
                     </div>
                     <div className={`px-4 py-2 rounded-xl font-bold text-sm ${theme.badge} self-start md:self-center shadow-sm`}>
-                      {analysis.range_desc}
+                      {typeof analysis.range_desc === 'function' ? analysis.range_desc(policy) : analysis.range_desc}
                     </div>
                   </div>
                 </div>
@@ -783,20 +853,20 @@ export default function Analyzer({ session, fullName }) {
                         <h5 className="font-bold text-indigo-800 text-sm uppercase tracking-wider">Family Coverage Analysis</h5>
                       </div>
 
-                      <div className="flex flex-col md:flex-row gap-6 items-start">
+                      <div className="flex flex-col md:flex-row print:flex-row gap-6 items-start">
                         <div className="flex-1">
-                          <p className="text-sm text-slate-700 font-medium leading-relaxed mb-3">
+                          <p className="text-sm text-slate-700 font-medium leading-relaxed mb-3 print:text-xs">
                             {report.family_analysis.insight}
                           </p>
-                          <div className="flex flex-wrap gap-2">
-                            <span className="text-xs font-bold text-slate-500 uppercase tracking-wide">Composition:</span>
-                            <span className="text-xs font-bold bg-white px-2 py-1 rounded border border-indigo-100 text-indigo-600 shadow-sm">
+                          <div className="flex flex-wrap gap-2 mt-4 print:mt-2">
+                            <span className="text-xs print:text-[10px] font-bold text-slate-500 uppercase tracking-wide mt-0.5">Composition:</span>
+                            <span className="text-xs print:text-[10px] font-bold bg-white px-2 py-1 rounded border border-indigo-100 text-indigo-600 shadow-sm">
                               {report.family_analysis.status}
                             </span>
                           </div>
                         </div>
 
-                        <div className="md:w-1/3 bg-white rounded-xl p-4 border border-indigo-100 shadow-sm md:-mt-12 relative z-10">
+                        <div className="w-full md:w-1/3 print:w-1/3 bg-white rounded-xl p-4 border border-indigo-100 shadow-sm md:-mt-12 print:-mt-12 relative z-10 shrink-0">
                           <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Key Priorities</p>
                           <ul className="space-y-2">
                             {report.family_analysis.key_priorities?.map((p, k) => (
@@ -811,7 +881,7 @@ export default function Analyzer({ session, fullName }) {
                   )}
 
                   {/* Market Insight Footer - Premium Look */}
-                  <div className="bg-slate-900 rounded-2xl p-6 text-white shadow-2xl relative overflow-hidden group">
+                  <div className="bg-slate-900 rounded-2xl p-6 text-white shadow-2xl relative overflow-hidden group print:break-inside-avoid print:mt-6">
                     {/* Gradient Overlay */}
                     <div className="absolute top-0 right-0 w-64 h-64 bg-gradient-to-br from-blue-600 to-purple-600 rounded-full blur-3xl opacity-20 -translate-y-1/2 translate-x-1/3 group-hover:opacity-30 transition duration-700"></div>
 
@@ -819,15 +889,15 @@ export default function Analyzer({ session, fullName }) {
                       <div className="flex items-center gap-2 mb-4 pb-4 border-b border-slate-700">
                         <span className="text-xl">💡</span>
                         <span className="font-bold text-blue-200 uppercase tracking-wider text-xs">
-                          Local Health Insight: {report.location_analysis?.city || "Your City"}
+                          {getTargetPossessive(policy)} Local Insight: {report.location_analysis?.city || "Your City"}
                         </span>
                       </div>
 
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-sm text-slate-300 mb-6">
+                      <div className="grid grid-cols-2 gap-4 md:gap-6 text-sm text-slate-300 mb-6 print:grid-cols-2">
                         {report.location_analysis?.major_illnesses?.map((illness, idx) => (
                           <div key={idx}>
-                            <p className="mb-1 text-slate-400 text-xs uppercase font-bold">{illness.illness}</p>
-                            <p className="font-bold text-white text-lg mb-1">{illness.estimated_cost}</p>
+                            <p className="mb-0.5 text-slate-400 text-[10px] md:text-xs print:text-[10px] uppercase font-bold">{illness.illness}</p>
+                            <p className="font-bold text-white text-base md:text-lg print:text-base">{illness.estimated_cost}</p>
                           </div>
                         ))}
                         {(!report.location_analysis?.major_illnesses || report.location_analysis?.major_illnesses.length === 0) && (
@@ -867,11 +937,11 @@ export default function Analyzer({ session, fullName }) {
             <div className="mt-10 print:mt-4 animate-fade-in space-y-10 print:space-y-4" id="report-content">
               {/* Policy Analysis Section */}
               {/* Policy Analysis Section - Comprehensive Checklist */}
-              <div className="max-w-4xl mx-auto">
+              <div className="max-w-4xl mx-auto print:break-before-page">
 
                 {/* Product Score Card */}
                 {report.product_score && (
-                  <div className="bg-gradient-to-r from-slate-900 to-slate-800 rounded-3xl p-8 text-white shadow-2xl mb-10 flex flex-col md:flex-row items-center justify-between gap-6 relative overflow-hidden">
+                  <div className="bg-gradient-to-r from-slate-900 to-slate-800 rounded-3xl p-8 text-white shadow-2xl mb-10 flex flex-col md:flex-row print:flex-row items-center justify-between gap-6 relative overflow-hidden">
                     <div className="absolute top-0 right-0 w-64 h-64 bg-white opacity-5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2"></div>
                     <div>
                       <h3 className="text-2xl font-black mb-1">Policy Health Score</h3>
@@ -894,7 +964,7 @@ export default function Analyzer({ session, fullName }) {
 
                 <h3 className="text-2xl font-black text-slate-800 mb-6 text-center">Comprehensive Feature Analysis</h3>
 
-                <div className="space-y-8">
+                <div className="space-y-4">
                   {(() => {
                     const order = ["Non-Negotiable Benefits", "Must Have", "Good to Have", "Special Features"];
                     const groups = report.feature_analysis?.reduce((acc, item) => {
@@ -907,54 +977,82 @@ export default function Analyzer({ session, fullName }) {
                       if (!groups[cat]) return null;
 
                       const theme = {
-                        "Non-Negotiable Benefits": { border: "border-l-rose-500", bg: "bg-rose-50/30", bar: "bg-rose-500" },
-                        "Must Have": { border: "border-l-blue-500", bg: "bg-blue-50/30", bar: "bg-blue-500" },
-                        "Good to Have": { border: "border-l-emerald-500", bg: "bg-emerald-50/30", bar: "bg-emerald-500" },
-                        "Special Features": { border: "border-l-purple-500", bg: "bg-purple-50/30", bar: "bg-purple-500" }
-                      }[cat] || { border: "border-l-slate-300", bg: "bg-slate-50", bar: "bg-slate-300" };
+                        "Non-Negotiable Benefits": { bg: "bg-rose-50/40", bar: "bg-rose-500", chevron: "text-rose-400", count: "bg-rose-100 text-rose-600" },
+                        "Must Have": { bg: "bg-blue-50/40", bar: "bg-blue-500", chevron: "text-blue-400", count: "bg-blue-100 text-blue-600" },
+                        "Good to Have": { bg: "bg-emerald-50/40", bar: "bg-emerald-500", chevron: "text-emerald-400", count: "bg-emerald-100 text-emerald-600" },
+                        "Special Features": { bg: "bg-purple-50/40", bar: "bg-purple-500", chevron: "text-purple-400", count: "bg-purple-100 text-purple-600" }
+                      }[cat] || { bg: "bg-slate-50", bar: "bg-slate-300", chevron: "text-slate-400", count: "bg-slate-100 text-slate-500" };
+
+                      const isOpen = !!expandedCategories[cat];
+                      const positiveCount = groups[cat].filter(i => i.status === "Positive").length;
 
                       return (
-                        <div key={cat} className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-                          <div className={`px-6 py-4 border-b border-slate-100 flex items-center gap-3 ${theme.bg}`}>
-                            <div className={`w-1 h-6 rounded-full ${theme.bar}`}></div>
-                            <h4 className="font-bold text-lg text-slate-800">{cat}</h4>
+                        <div key={cat} className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden transition-all duration-200">
+                          {/* Print-only static category header */}
+                          <div className={`hidden print:flex items-center gap-3 px-6 py-4 border-b border-slate-100 ${theme.bg}`}>
+                            <div className={`w-1.5 h-6 rounded-full ${theme.bar} shrink-0`}></div>
+                            <h4 className="font-bold text-lg text-slate-800 flex-1">{cat}</h4>
+                            <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${theme.count}`}>
+                              {positiveCount}/{groups[cat].length} covered
+                            </span>
                           </div>
-                          <div className="divide-y divide-slate-50">
-                            {groups[cat].map((item, idx) => (
-                              <div key={idx} className="px-6 py-4 flex flex-col hover:bg-slate-50 transition-colors">
-                                <div className="flex items-center justify-between">
-                                  <div className="pr-4">
-                                    <p className="font-bold text-slate-700 text-sm">
-                                      {item.feature}
-                                    </p>
-                                    {item.explanation && (
-                                      <p className="text-xs text-slate-400 mt-1 mb-1.5 leading-relaxed pr-2">
-                                        {item.explanation}
+
+                          {/* Clickable Header — screen only */}
+                          <button
+                            onClick={() => setExpandedCategories(prev => ({ ...prev, [cat]: !prev[cat] }))}
+                            className={`w-full px-6 py-4 flex items-center gap-3 ${theme.bg} hover:brightness-95 transition-all duration-200 text-left print:hidden`}
+                          >
+                            <div className={`w-1.5 h-6 rounded-full ${theme.bar} shrink-0`}></div>
+                            <h4 className="font-bold text-lg text-slate-800 flex-1">{cat}</h4>
+                            {/* Feature count badge */}
+                            <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${theme.count}`}>
+                              {positiveCount}/{groups[cat].length} covered
+                            </span>
+                            {/* Chevron */}
+                            <svg
+                              className={`w-5 h-5 ${theme.chevron} transition-transform duration-300 ${isOpen ? 'rotate-180' : 'rotate-0'}`}
+                              fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}
+                            >
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                            </svg>
+                          </button>
+
+                          {/* Collapsible Feature List — always rendered so print always shows all features */}
+                          <div className={`divide-y divide-slate-50 border-t border-slate-100 ${isOpen ? 'block' : 'hidden'} print:!block`}>
+                              {groups[cat].map((item, idx) => (
+                                <div key={idx} className="px-6 py-4 flex flex-col hover:bg-slate-50 transition-colors">
+                                  <div className="flex items-center justify-between">
+                                    <div className="pr-4">
+                                      <p className="font-bold text-slate-700 text-sm">
+                                        {item.feature}
                                       </p>
-                                    )}
-                                    <p className="text-xs text-slate-800 font-medium">{item.value}</p>
+                                      {item.explanation && (
+                                        <p className="text-xs text-slate-400 mt-1 mb-1.5 leading-relaxed pr-2">
+                                          {item.explanation}
+                                        </p>
+                                      )}
+                                      <p className="text-xs text-slate-800 font-medium">{item.value}</p>
+                                    </div>
+                                    <div className="shrink-0 ml-4">
+                                      {item.status === "Positive" ? (
+                                        <span className="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-600 shadow-sm text-lg" title={`Score Weight: ${item.score_weight || 'N/A'}`}>✓</span>
+                                      ) : (
+                                        <span className="w-8 h-8 rounded-full bg-rose-100 flex items-center justify-center text-rose-600 shadow-sm text-sm" title={`Score Weight: ${item.score_weight || 'N/A'}`}>✕</span>
+                                      )}
+                                    </div>
                                   </div>
-                                  <div className="shrink-0 ml-4">
-                                    {item.status === "Positive" ? (
-                                      <span className="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-600 shadow-sm text-lg" title={`Score Weight: ${item.score_weight || 'N/A'}`}>✓</span>
-                                    ) : (
-                                      <span className="w-8 h-8 rounded-full bg-rose-100 flex items-center justify-center text-rose-600 shadow-sm text-sm" title={`Score Weight: ${item.score_weight || 'N/A'}`}>✕</span>
-                                    )}
-                                  </div>
+                                  {(item.policy_text && item.policy_text !== "N/A" && item.policy_text !== "Not Explicitly Mentioned") && (
+                                    <div className={`mt-3 p-3 rounded-lg border text-xs italic border-l-2 ${item.status === "Positive"
+                                      ? "bg-amber-50/80 border-amber-200 text-amber-800 border-l-amber-400"
+                                      : "bg-slate-100/50 border-slate-100/50 text-slate-600 border-l-slate-300"
+                                      }`}>
+                                      <span className={`font-bold not-italic mr-1 ${item.status === "Positive" ? "text-amber-700" : "text-slate-500"}`}>Policy Extract:</span>
+                                      "{item.policy_text}"
+                                    </div>
+                                  )}
                                 </div>
-                                {(item.policy_text && item.policy_text !== "N/A" && item.policy_text !== "Not Explicitly Mentioned") && (
-                                  <div className={`mt-3 p-3 rounded-lg border text-xs italic border-l-2 ${item.status === "Positive"
-                                    ? "bg-amber-50/80 border-amber-200 text-amber-800 border-l-amber-400"
-                                    : "bg-slate-100/50 border-slate-100/50 text-slate-600 border-l-slate-300"
-                                    }`}>
-                                    <span className={`font-bold not-italic mr-1 ${item.status === "Positive" ? "text-amber-700" : "text-slate-500"
-                                      }`}>Policy Extract:</span>
-                                    "{item.policy_text}"
-                                  </div>
-                                )}
-                              </div>
-                            ))}
-                          </div>
+                              ))}
+                            </div>
                         </div>
                       );
                     });
@@ -964,10 +1062,10 @@ export default function Analyzer({ session, fullName }) {
 
               {/* CURRENT POLICY STATS SECTION */}
               {report.current_policy_stats && (
-                <div className="max-w-4xl mx-auto break-inside-avoid print:mt-10">
+                <div className="max-w-4xl mx-auto break-inside-avoid print:break-before-page print:mb-16">
                   <div className="text-center mb-6">
                     <h5 className="font-bold text-slate-500 uppercase tracking-widest text-xs">Current Insurer Performance</h5>
-                    <h3 className="font-black text-2xl text-slate-800">{report.current_policy_stats.company || "Your Insurer"} Analysis</h3>
+                    <h3 className="font-black text-2xl text-slate-800">{report.current_policy_stats.company || `${getTargetPossessive(policy)} Insurer`} Analysis</h3>
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-6 print:grid-cols-3 print:gap-4">
@@ -1001,8 +1099,11 @@ export default function Analyzer({ session, fullName }) {
                 </div>
               )}
 
-              <div className="space-y-10 print:mt-12">
-                <h4 className="font-bold text-2xl text-slate-800 ml-1 border-l-8 border-blue-600 pl-4">Top Recommendations for You</h4>
+              <div className="hidden print:block w-full h-16"></div>
+              <div className="space-y-10">
+                <h4 className="font-bold text-2xl text-slate-800 ml-1 border-l-8 border-blue-600 pl-4">
+                  Top Recommendations for {getTargetName(policy) === 'You' ? 'You' : getTargetName(policy)}
+                </h4>
 
                 {/* Flatten all recommendations into a single list to guarantee horizontal layout */}
                 {(() => {

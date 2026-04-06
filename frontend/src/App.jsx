@@ -10,12 +10,14 @@ import AdminDashboard from './components/AdminDashboard';
 import Analyzer from './components/Analyzer';
 import Settings from './components/Settings';
 import UpdatePassword from './components/UpdatePassword';
+import PhoneVerificationGate from './components/PhoneVerificationGate';
 
 export default function App() {
     const [session, setSession] = useState(null);
     const [role, setRole] = useState(null);
     const [fullName, setFullName] = useState(null);
     const [username, setUsername] = useState(null);
+    const [phoneVerified, setPhoneVerified] = useState(null);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
@@ -25,33 +27,43 @@ export default function App() {
             if (signupHandled) return true;
             if (window.location.hash && window.location.hash.includes('type=signup')) {
                 signupHandled = true;
-                await supabase.auth.signOut();
-                window.history.replaceState(null, '', window.location.pathname);
-                toast.success("Email confirmed successfully! Please log in with your credentials.");
-                setSession(null);
-                setRole(null);
-                setFullName(null);
-                setUsername(null);
-                setLoading(false);
-                return true;
+                // Remove the aggressive sign out so Supabase can seamlessly log the user in
+                // window.history.replaceState(null, '', window.location.pathname); 
+                toast.success("Email confirmed successfully! Securing account...", { id: 'email-confirm-toast' });
+                return false; // Return false so initialization grabs the token and drops them into the Gate
             }
             return false;
         };
 
         const initializeSession = async () => {
             console.log("DEBUG: checkUser started");
-            if (await handleSignupConfirmation()) return;
+            await handleSignupConfirmation();
 
             try {
                 console.log("DEBUG: Awaiting supabase.auth.getSession()");
                 const { data: { session: currentSession }, error } = await supabase.auth.getSession();
                 console.log("DEBUG: getSession returned", currentSession, error);
-                
+
                 if (!mounted) return;
-                
+
                 if (currentSession && !error) {
+                    // Check if they are halfway through a phone verification signup
+                    if (sessionStorage.getItem('signup_in_progress') === 'true') {
+                        console.log("DEBUG: Abandoned mid-signup detected during refresh. Cleaning up.");
+                        await supabase.auth.signOut();
+                        sessionStorage.removeItem('signup_in_progress');
+                        if (mounted) setLoading(false);
+                        return;
+                    }
+
                     await fetchUserData(currentSession.user.id);
-                    if (mounted) setSession(currentSession);
+                    // CRITICAL: Set session FIRST, then stop loading.
+                    // This ensures the router always sees session+role together,
+                    // preventing the brief session=null flash that redirected admins to /dashboard.
+                    if (mounted) {
+                        setSession(currentSession);
+                        setLoading(false);
+                    }
                 } else {
                     if (mounted) setLoading(false);
                 }
@@ -68,11 +80,16 @@ export default function App() {
             if (await handleSignupConfirmation()) return;
 
             if (currentSession) {
-                // Only re-fetch user profile on explicit SIGNED_IN or if we somehow lack the role
-                // This prevents redundant requests during TOKEN_REFRESHED events every few minutes
+                // If they are verifying OTP, wait for them to click "Create Account" before shifting the router
+                if (sessionStorage.getItem('signup_in_progress') === 'true') {
+                    console.log("DEBUG: Signup in progress, holding router at /login.");
+                    return;
+                }
+
                 if (event === 'SIGNED_IN' || event === 'USER_UPDATED' || !role) {
                     await fetchUserData(currentSession.user.id);
                 }
+                // Set session after profile fetch so router always sees consistent state
                 if (mounted) setSession(currentSession);
             } else {
                 if (mounted) {
@@ -80,6 +97,7 @@ export default function App() {
                     setRole(null);
                     setFullName(null);
                     setUsername(null);
+                    setPhoneVerified(null);
                     setLoading(false);
                 }
             }
@@ -95,13 +113,13 @@ export default function App() {
         console.log("DEBUG: fetchUserData started for user", userId);
         try {
             console.log("DEBUG: Awaiting profiles query...");
-            const timeoutPromise = new Promise((_, reject) => 
+            const timeoutPromise = new Promise((_, reject) =>
                 setTimeout(() => reject(new Error("Supabase Database Query TIMED OUT after 5s")), 5000)
             );
-            
+
             const queryPromise = supabase
                 .from('profiles')
-                .select('role, full_name, username')
+                .select('role, full_name, username, phone')
                 .eq('id', userId)
                 .single();
 
@@ -112,49 +130,68 @@ export default function App() {
                 setRole(data.role);
                 setFullName(data.full_name);
                 setUsername(data.username);
+                // If phone exists and isn't empty string, it's verified
+                setPhoneVerified(!!data.phone);
             } else {
-                console.log("DEBUG: Profile missing for user, attempting repair...");
-                const { data: { user } } = await Promise.race([
-                    supabase.auth.getUser(),
-                    new Promise(r => setTimeout(() => r({ data: { user: null } }), 3000))
-                ]);
-                
-                if (user) {
-                    const meta = user.user_metadata || {};
-                    const fallbackName = meta.full_name || user.email?.split('@')[0] || "User";
-                    const fallbackUsername = meta.username || (user.email?.split('@')[0] + Math.floor(Math.random() * 1000)) || `user_${userId.substring(0, 5)}`;
-
-                    const { data: repaired, error: repairError } = await supabase
-                        .from('profiles')
-                        .upsert({
-                            id: userId,
-                            full_name: fallbackName,
-                            username: fallbackUsername,
-                            email: user.email,
-                        }, { onConflict: 'id' })
-                        .select()
-                        .single();
-
-                    if (!repairError && repaired) {
-                        setRole(repaired.role);
-                        setFullName(repaired.full_name);
-                        setUsername(repaired.username);
-                    } else {
-                        setRole('client');
-                        setFullName(fallbackName);
-                    }
+                // Profile not found — account was deleted. Sign out immediately.
+                console.warn("DEBUG: Profile not found for user. Account may have been deleted. Signing out.", error);
+                if (error) {
+                    toast.error("Database Error: " + error.message, { duration: 6000 });
                 } else {
-                    setRole('client');
+                    toast.error("Critical Error: User profile missing in database. The Supabase trigger likely failed to create your profile row.", { duration: 8000 });
                 }
+                await supabase.auth.signOut();
+                setSession(null);
+                setRole(null);
+                setFullName(null);
+                setUsername(null);
+                setPhoneVerified(null);
+                setLoading(false);
             }
         } catch (err) {
-            console.error("DEBUG: Error fetching/repairing user data", err);
-            setRole('client');
-        } finally {
-            console.log("DEBUG: fetchUserData FINALLY calling setLoading(false)");
-            setLoading(false);
+            // NOTE: Do NOT set role='client' here — that would break admin users on a slow query.
+            // The callers (initializeSession / onAuthStateChange) handle setLoading after this returns.
+            console.error("DEBUG: Error fetching user profile data", err);
         }
+        // setLoading(false) is intentionally NOT called here.
+        // It is called by initializeSession after setSession(), so the router
+        // always sees session+role together in the same render cycle.
     };
+
+    // Auto-Logout if idle for 30 minutes
+    useEffect(() => {
+        let timeoutId;
+        const resetTimer = () => {
+            clearTimeout(timeoutId);
+            if (session) {
+                // 30 minutes = 1,800,000 milliseconds
+                const IDLE_TIMEOUT_MS = 15 * 60 * 1000;
+                timeoutId = setTimeout(async () => {
+                    console.log("DEBUG: User idle for too long. Forcing sign out.");
+                    await supabase.auth.signOut();
+                    toast.error("You have been signed out securely due to inactivity.", { duration: 6000 });
+                }, IDLE_TIMEOUT_MS);
+            }
+        };
+
+        if (session) {
+            window.addEventListener('mousemove', resetTimer);
+            window.addEventListener('mousedown', resetTimer);
+            window.addEventListener('keydown', resetTimer);
+            window.addEventListener('scroll', resetTimer);
+            window.addEventListener('touchstart', resetTimer);
+            resetTimer(); // Start the timer immediately upon mount/session
+        }
+
+        return () => {
+            clearTimeout(timeoutId);
+            window.removeEventListener('mousemove', resetTimer);
+            window.removeEventListener('mousedown', resetTimer);
+            window.removeEventListener('keydown', resetTimer);
+            window.removeEventListener('scroll', resetTimer);
+            window.removeEventListener('touchstart', resetTimer);
+        };
+    }, [session]);
 
     if (loading) {
         return (
@@ -162,6 +199,15 @@ export default function App() {
                 <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mb-4"></div>
                 <div className="text-slate-500 font-bold animate-pulse text-sm uppercase tracking-widest">Verifying Session...</div>
             </div>
+        );
+    }
+
+    if (session && phoneVerified === false) {
+        return (
+            <>
+                <Toaster position="top-right" />
+                <PhoneVerificationGate session={session} onVerified={(newPhone) => setPhoneVerified(true)} />
+            </>
         );
     }
 
@@ -174,10 +220,10 @@ export default function App() {
                     path="/login"
                     element={!session ? <Auth /> : <Navigate to={role === 'admin' ? '/admin' : '/dashboard'} replace />}
                 />
-                
-                <Route 
-                    path="/update-password" 
-                    element={<UpdatePassword />} 
+
+                <Route
+                    path="/update-password"
+                    element={<UpdatePassword />}
                 />
 
                 {/* Client Routes */}

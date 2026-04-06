@@ -237,12 +237,20 @@ MAX_UPLOAD_SIZE_BYTES = int(os.getenv("MAX_UPLOAD_SIZE", 10 * 1024 * 1024))
 
 # Using models discovered via check_models.py (Prioritizing Flash models for speed)
 MODEL_CANDIDATES = [
+    "gemini-3-flash-preview",
+    "gemini-2.5-flash",
+    "gemini-3.1-pro-preview",
+    "gemini-3-pro-preview",
+    "gemini-2.5-pro",
+    "gemini-3.1-flash-live-preview",
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
     "gemini-1.5-flash",
     "gemini-1.5-flash-latest",
     "gemini-2.0-flash-exp",
     "gemini-2.0-flash-lite-preview-09-2025",
-    "gemini-2.5-flash-preview-09-2025", # Retained from user logs
-    "gemini-2.5-flash-lite-preview-09-2025", # Retained from user logs
+    "gemini-2.5-flash-preview-09-2025",
+    "gemini-2.5-flash-lite-preview-09-2025",
     "gemini-1.5-pro",
     "gemini-1.5-pro-latest"
 ]
@@ -647,6 +655,7 @@ async def extract_policy(file: UploadFile = File(...), user: dict = Depends(get_
              - Labels: "Base Sum Insured", "Cumulative Bonus", "Super No Claim Bonus", "Recharge Benefit", "Deductible".
              - Example: [{{"label": "Base Sum Insured", "value": "10,00,000"}}, {{"label": "Deductible", "value": "50,000"}}]
              - **CRITICAL**: Do NOT include percentages. Output absolute currency AMOUNT. If a table gives both a percentage and an amount (e.g., "Super Credit Amount = 500000" vs "Super Credit % = 100"), you MUST extract the actual currency AMOUNT ("500000"), not the percentage!
+             - **CALCULATE TOTAL**: The "total" field MUST be mathematically calculated as: (Base Sum Insured) + (Any Cumulative/Super Bonuses). Then, if a Deductible is present, you MUST SUBTRACT the Deductible from that sum. (e.g., 10L Base - 2L Deductible = 8,00,000 total).
 
         Return JSON format exactly like this:
         {{ 
@@ -735,12 +744,16 @@ async def extract_policy(file: UploadFile = File(...), user: dict = Depends(get_
             if "```json" in text1: text1 = text1.split("```json")[1].split("```")[0].strip()
             elif "```" in text1: text1 = text1.split("```")[1].split("```")[0].strip()
             data_p1 = json.loads(text1, strict=False)
+            if isinstance(data_p1, list):
+                data_p1 = data_p1[0] if len(data_p1) > 0 else {}
 
             # --- Parsing Pass 2 (Features) ---
             text2 = res2.text.strip()
             if "```json" in text2: text2 = text2.split("```json")[1].split("```")[0].strip()
             elif "```" in text2: text2 = text2.split("```")[1].split("```")[0].strip()
             data_p2 = json.loads(text2, strict=False)
+            if isinstance(data_p2, list):
+                data_p2 = data_p2[0] if len(data_p2) > 0 else {}
 
             # --- PASS 3: CONTRADICTION VALIDATOR ---
             try:
@@ -761,6 +774,8 @@ Data to review:
                 elif "```" in text3: text3 = text3.split("```")[1].split("```")[0].strip()
                 
                 data_p3 = json.loads(text3, strict=False)
+                if isinstance(data_p3, list):
+                    data_p3 = data_p3[0] if len(data_p3) > 0 else {}
                 if "features_found" in data_p3:
                     data_p2["features_found"] = data_p3["features_found"]
                 if "verbatim_quotes" in data_p3:
