@@ -49,7 +49,8 @@ export default function AdminDashboard({ session, fullName }) {
         await supabase.auth.signOut();
         localStorage.clear();
         sessionStorage.clear();
-        window.location.href = '/login';
+        // React Router via App.jsx will automatically redirect to /login
+        navigate('/login', { replace: true });
     };
 
     const handleDeleteAnalysis = (id, e) => {

@@ -202,12 +202,8 @@ export default function Auth() {
 
                 toast.success('Successfully signed in! Redirecting...', { duration: 2000 });
 
-                // Force a hard redirect to bypass any router race conditions with the auth event listener
-                setTimeout(() => {
-                    window.location.href = "/dashboard";
-                }, 800);
-
-                // Prevent finally block from turning off the spinner too early
+                // App.jsx will automatically handle the redirect based on the onAuthStateChange event
+                // We return strictly to prevent finally block from turning off the spinner too early
                 return;
 
             } else if (!isLogin && !isForgotPassword) {

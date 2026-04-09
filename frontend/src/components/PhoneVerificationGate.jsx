@@ -107,7 +107,6 @@ export default function PhoneVerificationGate({ session, onVerified }) {
 
     const handleSignOut = async () => {
         await supabase.auth.signOut();
-        window.location.href = '/';
     };
 
     return (
@@ -222,6 +221,11 @@ export default function PhoneVerificationGate({ session, onVerified }) {
                                             const val = e.target.value.replace(/\D/g, '');
                                             if (val.length <= 10) setPhone(val);
                                         }}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter' && phone.trim().length === 10 && !loading) {
+                                                handleSendOtp();
+                                            }
+                                        }}
                                         placeholder="10-digit number"
                                         className={`appearance-none block w-full pl-10 pr-3 py-3 border rounded-xl text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 transition-all sm:text-sm ${
                                             otpSent ? 'bg-slate-50 border-slate-200 cursor-not-allowed' : 'border-slate-200 bg-white focus:border-rose-300 focus:ring-rose-500'
@@ -249,6 +253,11 @@ export default function PhoneVerificationGate({ session, onVerified }) {
                                         onChange={(e) => {
                                             const val = e.target.value.replace(/\D/g, '');
                                             if (val.length <= 6) setOtp(val);
+                                        }}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter' && otp.trim().length === 6 && !loading) {
+                                                handleVerifyOtp();
+                                            }
                                         }}
                                         placeholder="000000"
                                         className="flex-1 px-4 py-3 border shadow-sm border-emerald-200 rounded-xl bg-emerald-50 text-slate-900 placeholder-emerald-300 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-center text-lg font-mono tracking-widest"

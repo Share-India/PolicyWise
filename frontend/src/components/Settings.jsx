@@ -177,7 +177,7 @@ export default function Settings({ session, fullName, username, onProfileUpdate 
             sessionStorage.clear();
 
             toast.success("Your account has been deleted successfully.");
-            window.location.href = '/login';
+            navigate('/login', { replace: true });
         } catch (err) {
             setDeleteError(err.message);
         } finally {

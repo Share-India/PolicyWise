@@ -782,13 +782,21 @@ export default function Analyzer({ session, fullName }) {
             )}
 
             {!analysisId && (
-              <button
-                onClick={handleCompare}
-                disabled={!policy.company || loading.comparing || (hasSeniorCitizen(policy) && policy.has_medical_history === undefined)}
-                className="w-full mt-8 mb-6 bg-gradient-to-r from-blue-600 to-indigo-600 text-white py-4 rounded-xl font-bold uppercase text-sm tracking-widest hover:from-blue-700 hover:to-indigo-700 hover:shadow-lg hover:shadow-indigo-200 transition transform hover:-translate-y-0.5 disabled:opacity-70 disabled:cursor-not-allowed print:hidden"
-              >
-                {loading.comparing ? "Generating Report..." : "Generate Analysis Report"}
-              </button>
+              <div className="mt-8 mb-6 print:hidden">
+                {hasSeniorCitizen(policy) && policy.has_medical_history === undefined && (
+                  <div className="flex items-center gap-2 mb-3 text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm font-semibold animate-pulse">
+                    <span>⬆️</span>
+                    <span>Please answer the medical history question above to continue.</span>
+                  </div>
+                )}
+                <button
+                  onClick={handleCompare}
+                  disabled={!policy.company || loading.comparing || (hasSeniorCitizen(policy) && policy.has_medical_history === undefined)}
+                  className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 text-white py-4 rounded-xl font-bold uppercase text-sm tracking-widest hover:from-blue-700 hover:to-indigo-700 hover:shadow-lg hover:shadow-indigo-200 transition transform hover:-translate-y-0.5 disabled:opacity-70 disabled:cursor-not-allowed"
+                >
+                  {loading.comparing ? "Generating Report..." : "Generate Analysis Report"}
+                </button>
+              </div>
             )}
           </div>
         )}

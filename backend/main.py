@@ -16,6 +16,46 @@ import io
 import difflib
 import filetype
 from supabase import create_client, Client
+from pydantic import BaseModel, Field
+from typing import List, Dict
+
+class ComponentSchema(BaseModel):
+    label: str
+    value: str
+
+class SumInsuredSchema(BaseModel):
+    total: str
+    components: List[ComponentSchema]
+
+class PolicyHolderSchema(BaseModel):
+    name: str = Field(..., description="Extract the full name of the policy holder")
+    dob: str
+    age: str
+
+class PolicyDetailsSchema(BaseModel):
+    start_date: str
+    vintage: str
+
+class Pass1Schema(BaseModel):
+    company: str
+    plan: str
+    add_ons: str
+    premium: str
+    coverage: str
+    city: str
+    pincode: str
+    policy_details: PolicyDetailsSchema
+    sum_insured: SumInsuredSchema
+    policy_holders: List[PolicyHolderSchema]
+
+class FeatureEvaluation(BaseModel):
+    feature_name: str = Field(..., description="The exact standardized Term from the REFERENCE FEATURES LIST.")
+    verbatim_quote: str = Field(..., description="Extract this FIRST, before determining the value. Quote the exact text from the document.")
+    value: str = Field(..., description="The calculated value/status of the feature based on the quote.")
+
+class Pass2Schema(BaseModel):
+    features: List[FeatureEvaluation]
+    comprehensive_findings: str
 
 load_dotenv(override=True)
 
@@ -235,25 +275,21 @@ app.add_middleware(
 MAX_UPLOAD_SIZE_BYTES = int(os.getenv("MAX_UPLOAD_SIZE", 10 * 1024 * 1024))
 
 
-# Using models discovered via check_models.py (Prioritizing Flash models for speed)
-MODEL_CANDIDATES = [
-    "gemini-3-flash-preview",
+# Using models discovered via check_models.py (Prioritizing stable models for structured schema capabilities)
+PASS1_MODELS = [
     "gemini-2.5-flash",
-    "gemini-3.1-pro-preview",
-    "gemini-3-pro-preview",
-    "gemini-2.5-pro",
-    "gemini-3.1-flash-live-preview",
     "gemini-2.0-flash",
-    "gemini-2.0-flash-lite",
-    "gemini-1.5-flash",
-    "gemini-1.5-flash-latest",
-    "gemini-2.0-flash-exp",
-    "gemini-2.0-flash-lite-preview-09-2025",
-    "gemini-2.5-flash-preview-09-2025",
-    "gemini-2.5-flash-lite-preview-09-2025",
-    "gemini-1.5-pro",
-    "gemini-1.5-pro-latest"
+    "gemini-1.5-flash"
 ]
+
+PASS2_MODELS = [
+    "gemini-2.5-pro",
+    "gemini-2.5-flash",
+    "gemini-1.5-pro"
+]
+
+# Legacy compatibility
+MODEL_CANDIDATES = PASS1_MODELS
 
 # City Tier Configuration
 TIER_1_CITIES = [
@@ -434,17 +470,22 @@ def parse_date(date_str):
             continue
     return None
 
-async def generate_content_with_fallback(client, contents, **kwargs):
+async def generate_content_with_fallback(client, contents, model_list=None, use_schema=False, **kwargs):
+    if model_list is None:
+        model_list = MODEL_CANDIDATES
     last_exception = None
-    for model in MODEL_CANDIDATES:
+    for model in model_list:
         try:
             print(f"Attempting model: {model}")
 
             config_params = {"response_mime_type": "application/json"}
             
-            # Merge kwargs into config_params (e.g. temperature)
+            # Merge kwargs into config_params (e.g. temperature, response_schema)
             if kwargs:
                 config_params.update(kwargs) # This allows passing temperature=0.0
+
+            if not use_schema and "response_schema" in config_params:
+                config_params.pop("response_schema")
 
             # If tools are provided, we cannot enforce JSON mime_type easily on all models
             # But the user wants JSON. 
@@ -551,6 +592,8 @@ async def extract_policy(file: UploadFile = File(...), user: dict = Depends(get_
         
         content = await file.read()
         
+        print(f"📦 File Size: {len(content) / 1024:.1f} KB", flush=True)
+        
         # --- SECURITY VALIDATION ---
         # 1. Size Validation
         if len(content) > MAX_UPLOAD_SIZE_BYTES:
@@ -563,6 +606,7 @@ async def extract_policy(file: UploadFile = File(...), user: dict = Depends(get_
             detected_type = kind.mime if kind else "unknown"
             print(f"SECURITY: Rejected file type {detected_type}. Only PDFs allowed.")
             raise HTTPException(status_code=415, detail="Invalid document format. Only valid PDF files are accepted.")
+        print("✅ Step 1/6: Security validation passed (valid PDF).", flush=True)
         # ----------------------------
 
         # Read features CSV for context
@@ -621,7 +665,7 @@ async def extract_policy(file: UploadFile = File(...), user: dict = Depends(get_
                 
                 # Update features_csv to only contain filtered list
                 features_csv = "\n".join(filtered_lines)
-                print(f"DEBUG: Filtered Features List to {len(filtered_lines)} items based on Dataset.")
+                print(f"✅ Step 2/6: Feature list filtered to {len(filtered_lines)} items from dataset.", flush=True)
             else:
                 features_csv = features_csv_content
         except Exception as e:
@@ -711,78 +755,74 @@ async def extract_policy(file: UploadFile = File(...), user: dict = Depends(get_
         7. **VERBATIM QUOTES REQUIRED**: You must extract the exact verbatim sentence from the PDF that proves your finding. If a feature is split (like Pre/Post), combine the quotes.
         8. Capture specific limits (e.g., "30/60 Days", "Up to SI", "1% of SI").
 
-        Return JSON format exactly like this:
-        {{
-          "features_found": {{
-            "Room Rent": "No Limit",
-            "In Patient Hospitalization": "Covered up to Sum Insured",
-            "Restoration Benefit": "Available up to 100% of Base Sum Insured once a year."
-          }},
-          "verbatim_quotes": {{
-            "Room Rent": "Room rent is uncapped for standard single private rooms.",
-            "In Patient Hospitalization": "Hospitalization expenses are covered for admissions over 24 hours.",
-            "Restoration Benefit": "Restoration benefit is available for unrelated illnesses."
-          }},
-          "comprehensive_findings": "Full text summary of all features found matched against the reference list..."
-        }}
+        Return your analysis exactly conforming to the provided strict structured JSON format.
+        You MUST provide an array of objects.
+        Each object must include 'feature_name', 'verbatim_quote', and 'value' fields.
         """
 
         try:
             # Using Gemini's native PDF bytes handler for much faster processing
             # Bypassing slow Docling local conversion
-            print("Using native Gemini PDF bytes handler for speed...")
+            print("\n⚙️  Step 3/6: Sending PDF to Gemini AI (Pass 1 + Pass 2 in parallel)...", flush=True)
+            print("   ├─ Pass 1: Extracting demographics, policy details, sum insured...", flush=True)
+            print("   └─ Pass 2: Scanning for medical features & coverage details...", flush=True)
             part_content = types.Part.from_bytes(data=content, mime_type=file.content_type)
 
             # Parallel Execution of both prompts
-            task1 = generate_content_with_fallback(client, [prompt_1, part_content], temperature=0.0)
-            task2 = generate_content_with_fallback(client, [prompt_2, part_content], temperature=0.0)
+            task1 = generate_content_with_fallback(
+                client, [prompt_1, part_content], 
+                model_list=PASS1_MODELS, 
+                use_schema=True, 
+                response_schema=Pass1Schema, 
+                temperature=0.0
+            )
+            task2 = generate_content_with_fallback(
+                client, [prompt_2, part_content], 
+                model_list=PASS2_MODELS, 
+                use_schema=True, 
+                response_schema=Pass2Schema, 
+                temperature=0.0,
+                thinking_config=types.ThinkingConfig(thinking_budget=1024)
+            )
             
             res1, res2 = await asyncio.gather(task1, task2)
+            print("✅ Step 3/6: AI Pass 1 & 2 completed.", flush=True)
             
             # --- Parsing Pass 1 (Demographics) ---
+            print("\n🔍 Step 4/6: Parsing AI responses...", flush=True)
             text1 = res1.text.strip()
             if "```json" in text1: text1 = text1.split("```json")[1].split("```")[0].strip()
             elif "```" in text1: text1 = text1.split("```")[1].split("```")[0].strip()
             data_p1 = json.loads(text1, strict=False)
             if isinstance(data_p1, list):
                 data_p1 = data_p1[0] if len(data_p1) > 0 else {}
+            print(f"   ├─ Pass 1 parsed: Company='{data_p1.get('company', '?')}', Plan='{data_p1.get('plan', '?')}'", flush=True)
 
             # --- Parsing Pass 2 (Features) ---
             text2 = res2.text.strip()
             if "```json" in text2: text2 = text2.split("```json")[1].split("```")[0].strip()
             elif "```" in text2: text2 = text2.split("```")[1].split("```")[0].strip()
-            data_p2 = json.loads(text2, strict=False)
-            if isinstance(data_p2, list):
-                data_p2 = data_p2[0] if len(data_p2) > 0 else {}
-
-            # --- PASS 3: CONTRADICTION VALIDATOR ---
-            try:
-                print("Running Pass 3: Contradiction Validator...", flush=True)
-                prompt_validation = f"""
-Review this extracted insurance data for contradictions.
-For EACH feature, check whether the value and the verbatim_quote actually agree:
-- EXAMPLE CONTRADICTION: value="Covered (No Sub-limits)", quote="Room rent capped at 1% of SI" → WRONG
-- Fix ALL contradictions. The verbatim_quote is always the source of truth.
-- Return ONLY the corrected features_found and verbatim_quotes dicts. Nothing else.
-
-Data to review:
-{json.dumps({"features_found": data_p2.get("features_found", {}), "verbatim_quotes": data_p2.get("verbatim_quotes", {})})}
-"""
-                res3 = await generate_content_with_fallback(client, [prompt_validation], temperature=0.0)
-                text3 = res3.text.strip()
-                if "```json" in text3: text3 = text3.split("```json")[1].split("```")[0].strip()
-                elif "```" in text3: text3 = text3.split("```")[1].split("```")[0].strip()
+            
+            raw_p2 = json.loads(text2, strict=False)
+            if isinstance(raw_p2, list):
+                raw_p2 = raw_p2[0] if len(raw_p2) > 0 else {}
                 
-                data_p3 = json.loads(text3, strict=False)
-                if isinstance(data_p3, list):
-                    data_p3 = data_p3[0] if len(data_p3) > 0 else {}
-                if "features_found" in data_p3:
-                    data_p2["features_found"] = data_p3["features_found"]
-                if "verbatim_quotes" in data_p3:
-                    data_p2["verbatim_quotes"] = data_p3["verbatim_quotes"]
-                print("Pass 3 Validator completed successfully.", flush=True)
-            except Exception as e:
-                print(f"WARNING: Pass 3 Validator failed (non-critical): {e}", flush=True)
+            # Remap Gemini's list of objects back to dict mapping expected by the rest of the application
+            data_p2 = {
+                "features_found": {}, 
+                "verbatim_quotes": {}, 
+                "comprehensive_findings": raw_p2.get("comprehensive_findings", "")
+            }
+            features_list = raw_p2.get("features", [])
+            for feat in features_list:
+                fname = feat.get("feature_name")
+                if fname:
+                    data_p2["features_found"][fname] = feat.get("value", "")
+                    data_p2["verbatim_quotes"][fname] = feat.get("verbatim_quote", "")
+                    
+            feat_count = len(data_p2.get('features_found', {}))
+            print(f"   └─ Pass 2 parsed: {feat_count} features extracted from document.", flush=True)
+            print("✅ Step 4/6: All responses parsed successfully. (Pass 3 removed for speed optimization)", flush=True)
             
             # Merge JSON objects
             data = {**data_p1, **data_p2}
@@ -792,10 +832,11 @@ Data to review:
             try:
                 company_name = data.get("company", "")
                 plan_name = data.get("plan", "")
+                print(f"\n🗄️  Step 6/6: Running fallback — checking database for: '{company_name}' / '{plan_name}'...", flush=True)
                 if company_name and plan_name and PLANS_DATABASE_CSV_CONTENT:
                     matched_row = match_policy_in_csv(company_name, plan_name, PLANS_DATABASE_CSV_CONTENT)
                     if matched_row:
-                        print(f"DEBUG: Found Dataset Match for Fallback: {matched_row.get('Base Plan Name')}")
+                        print(f"   ✅ Database match found: '{matched_row.get('Base Plan Name')}' — filling gaps...", flush=True)
                         features_found = data.get("features_found", {})
                         verbatim_quotes = data.get("verbatim_quotes", {})
                         
@@ -1019,9 +1060,8 @@ Data to review:
         if user and supabase_client:
             try:
                 print(f"☁️ Uploading {file.filename} to Supabase Storage...")
-                # Need to read file again for upload
-                await file.seek(0)
-                file_bytes = await file.read()
+                # Use already-read file content, avoiding an awaited .seek() crash
+                file_bytes = content
 
                 
                 # Generate unique filename
@@ -1045,7 +1085,14 @@ Data to review:
                 print(f"❌ Supabase Storage Error: {e}")
                 # Don't fail extraction if upload fails
 
-        print("\n✅ [API] /api/extract COMPLETED SUCCESSFULLY!\n")
+        print(f"\n{'='*40}")
+        print(f"✅ [API] /api/extract COMPLETED SUCCESSFULLY!")
+        print(f"   Company : {data.get('company', 'N/A')}")
+        print(f"   Plan    : {data.get('plan', 'N/A')}")
+        print(f"   Holders : {len(data.get('policy_holders', []))} person(s)")
+        print(f"   Features: {len(data.get('features_found', {}))} extracted")
+        print(f"   SI Total: {data.get('sum_insured', {}).get('total', 'N/A')}")
+        print(f"{'='*40}\n")
         return data
 
     except Exception as e:
@@ -1709,6 +1756,10 @@ async def compare_policy(data: dict, user: dict = Depends(get_current_user)):
         text = text.replace("```json", "").replace("```", "").strip()
         try:
              result = json.loads(text)
+             # DEBUG: Dump the parsed result
+             with open("debug_result.json", "w") as f:
+                 json.dump(result, f, indent=2)
+
              # --- DETERMINISTIC FEATURE MAPPING ---
              # We take the raw dict from AI and stitch it back to the EXACT static categories and explanations from the CSV
              if "feature_analysis_dict" in result:
