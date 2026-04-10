@@ -824,7 +824,7 @@ async def _extract_policy_core(content: bytes, content_type: str, orig_filename:
             print("\n⚙️  Step 3/6: Sending PDF to Gemini AI (Pass 1 + Pass 2 in parallel)...", flush=True)
             print("   ├─ Pass 1: Extracting demographics, policy details, sum insured...", flush=True)
             print("   └─ Pass 2: Scanning for medical features & coverage details...", flush=True)
-            part_content = types.Part.from_bytes(data=content, mime_type=file.content_type)
+            part_content = types.Part.from_bytes(data=content, mime_type=content_type)
 
             # Parallel Execution of both prompts
             task1 = generate_content_with_fallback(
