@@ -1,5 +1,7 @@
 import os
 import sys
+import uuid
+import time
 import urllib.parse
 import json
 import csv
@@ -75,6 +77,17 @@ else:
 
 client = genai.Client(api_key=api_key)
 app = FastAPI()
+
+# --- ASYNC JOB QUEUE ---
+# Stores running/completed jobs in memory. Jobs expire after 30 minutes.
+JOB_STORE: dict = {}
+
+def _cleanup_old_jobs():
+    """Remove jobs older than 30 minutes to prevent memory leaks."""
+    cutoff = time.time() - 1800
+    expired = [jid for jid, j in JOB_STORE.items() if j.get("created_at", 0) < cutoff]
+    for jid in expired:
+        JOB_STORE.pop(jid, None)
 
 # --- LOAD PRE-CALCULATED PLAN SCORES & USPs & RAW CSV CONTENT ---
 PLAN_SCORES_DATA = {}
@@ -582,31 +595,76 @@ def calculate_waiting_period_status(extracted_data, features_found):
 
     return statuses
 
+# ---------------------------------------------------------------------------
+# ASYNC JOB WRAPPERS — kick off heavy AI work in background, return job_id
+# ---------------------------------------------------------------------------
+
+async def _run_extract_job(job_id: str, content: bytes, content_type: str, orig_filename: str, user: dict):
+    try:
+        JOB_STORE[job_id]["phase"] = "Running AI analysis (Pass 1 & 2 in parallel)..."
+        result = await _extract_policy_core(content, content_type, orig_filename, user)
+        JOB_STORE[job_id].update({"status": "completed", "result": result, "phase": "Done"})
+    except Exception as e:
+        JOB_STORE[job_id].update({"status": "failed", "error": str(e), "phase": "Failed"})
+    finally:
+        _cleanup_old_jobs()
+
+async def _run_compare_job(job_id: str, data: dict, user: dict):
+    try:
+        JOB_STORE[job_id]["phase"] = "Generating analysis report..."
+        result = await _compare_policy_core(data, user)
+        JOB_STORE[job_id].update({"status": "completed", "result": result, "phase": "Done"})
+    except Exception as e:
+        JOB_STORE[job_id].update({"status": "failed", "error": str(e), "phase": "Failed"})
+    finally:
+        _cleanup_old_jobs()
+
 @app.post("/api/extract")
 async def extract_policy(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
+    """Thin handler: validates file, fires background job, returns job_id immediately."""
+    content = await file.read()
+    orig_filename = file.filename or "policy.pdf"
+    content_type = file.content_type or "application/pdf"
+
+    # Quick validations (synchronous — done before returning job_id)
+    if len(content) > MAX_UPLOAD_SIZE_BYTES:
+        raise HTTPException(status_code=413, detail=f"File too large. Maximum size is {MAX_UPLOAD_SIZE_BYTES / (1024*1024):.1f}MB.")
+    kind = filetype.guess(content)
+    if kind is None or kind.mime != "application/pdf":
+        raise HTTPException(status_code=415, detail="Invalid document format. Only valid PDF files are accepted.")
+
+    job_id = str(uuid.uuid4())
+    JOB_STORE[job_id] = {"status": "processing", "phase": "Reading document...", "result": None, "error": None, "created_at": time.time()}
+    asyncio.create_task(_run_extract_job(job_id, content, content_type, orig_filename, user))
+    return {"job_id": job_id}
+
+@app.get("/api/job/{job_id}")
+async def get_job_status(job_id: str, user: dict = Depends(get_current_user)):
+    """Poll this endpoint to get the status and result of a background job."""
+    job = JOB_STORE.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found or expired. Please retry.")
+    return {
+        "status": job["status"],   # "processing" | "completed" | "failed"
+        "phase":  job["phase"],    # human-readable progress message
+        "result": job.get("result"),
+        "error":  job.get("error")
+    }
+
+# ---------------------------------------------------------------------------
+# CORE LOGIC (extracted from route handlers — called by background jobs)
+# ---------------------------------------------------------------------------
+
+async def _extract_policy_core(content: bytes, content_type: str, orig_filename: str, user: dict):
     try:
         print(f"\n{'='*40}")
-        print("🚀 [API] /api/extract STARTED")
-        print(f"📁 Received File: {file.filename}")
+        print("🚀 [JOB] _extract_policy_core STARTED")
+        print(f"📁 File: {orig_filename}")
         print(f"{'='*40}\n")
-        
-        content = await file.read()
+
         
         print(f"📦 File Size: {len(content) / 1024:.1f} KB", flush=True)
-        
-        # --- SECURITY VALIDATION ---
-        # 1. Size Validation
-        if len(content) > MAX_UPLOAD_SIZE_BYTES:
-            print(f"SECURITY: File size {len(content)} exceeds limit {MAX_UPLOAD_SIZE_BYTES}")
-            raise HTTPException(status_code=413, detail=f"File too large. Maximum size is {MAX_UPLOAD_SIZE_BYTES / (1024*1024):.1f}MB.")
-            
-        # 2. Deep MIME Type Validation (Magic numbers)
-        kind = filetype.guess(content)
-        if kind is None or kind.mime != "application/pdf":
-            detected_type = kind.mime if kind else "unknown"
-            print(f"SECURITY: Rejected file type {detected_type}. Only PDFs allowed.")
-            raise HTTPException(status_code=415, detail="Invalid document format. Only valid PDF files are accepted.")
-        print("✅ Step 1/6: Security validation passed (valid PDF).", flush=True)
+        print("✅ Step 1/6: Security validation passed (already done in route handler).", flush=True)
         # ----------------------------
 
         # Read features CSV for context
@@ -1059,24 +1117,22 @@ async def extract_policy(file: UploadFile = File(...), user: dict = Depends(get_
         pdf_url = None
         if user and supabase_client:
             try:
-                print(f"☁️ Uploading {file.filename} to Supabase Storage...")
-                # Use already-read file content, avoiding an awaited .seek() crash
+                print(f"☁️ Uploading {orig_filename} to Supabase Storage...")
                 file_bytes = content
 
-                
                 # Generate unique filename
-                filename = f"{user.get('sub')}/{datetime.now().strftime('%Y%m%d%H%M%S')}_{file.filename}"
-                
+                storage_filename = f"{user.get('sub')}/{datetime.now().strftime('%Y%m%d%H%M%S')}_{orig_filename}"
+
                 # Upload to Supabase Storage bucket 'policy_pdfs'
                 await run_in_threadpool(
                     supabase_client.storage.from_("policy_pdfs").upload,
                     file=file_bytes,
-                    path=filename,
-                    file_options={"content-type": file.content_type}
+                    path=storage_filename,
+                    file_options={"content-type": content_type}
                 )
                 
                 # Get public URL
-                pdf_url = supabase_client.storage.from_("policy_pdfs").get_public_url(filename)
+                pdf_url = supabase_client.storage.from_("policy_pdfs").get_public_url(storage_filename)
                 
                 # Append to JSON output
                 data["pdf_file_url"] = pdf_url
@@ -1178,8 +1234,16 @@ def get_relevant_plans_subset(plans_csv: str, user_profile: dict, current_plan: 
         print(f"DEBUG: Failed to subset plans: {e}")
         return plans_csv
 
+
 @app.post("/api/compare")
 async def compare_policy(data: dict, user: dict = Depends(get_current_user)):
+    """Thin handler: fires background compare job, returns job_id immediately."""
+    job_id = str(uuid.uuid4())
+    JOB_STORE[job_id] = {"status": "processing", "phase": "Starting analysis...", "result": None, "error": None, "created_at": time.time()}
+    asyncio.create_task(_run_compare_job(job_id, data, user))
+    return {"job_id": job_id}
+
+async def _compare_policy_core(data: dict, user: dict):
     try:
         print(f"\n{'='*40}")
         print("🚀 [API] /api/compare STARTED")

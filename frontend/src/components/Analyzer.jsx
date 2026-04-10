@@ -185,8 +185,9 @@ export default function Analyzer({ session, fullName }) {
   const [policy, setPolicy] = useState({ company: '', premium: '' });
   const [report, setReport] = useState(null);
   const [loading, setLoading] = useState({ extracting: false, comparing: false });
-  const [comparingItem, setComparingItem] = useState(null); // [NEW] State for comparison modal
-  const [showChat, setShowChat] = useState(false); // [NEW] State for full-screen chat view
+  const [jobPhase, setJobPhase] = useState(''); // Live progress message from backend job
+  const [comparingItem, setComparingItem] = useState(null);
+  const [showChat, setShowChat] = useState(false);
 
   // [NEW] Chat State
   const defaultWelcome = {
@@ -346,25 +347,60 @@ export default function Analyzer({ session, fullName }) {
     }
   }, [report, analysisId]);
 
+  // --- ASYNC JOB POLLER ---
+  // Polls GET /api/job/{job_id} every 2.5s until the backend finishes the AI work.
+  // This is needed because Cloudflare has a 100s hard timeout on proxied requests.
+  const pollJob = async (jobId) => {
+    const POLL_INTERVAL = 2500;
+    const MAX_WAIT_MS = 3 * 60 * 1000; // 3 minute failsafe
+    const started = Date.now();
+
+    return new Promise((resolve, reject) => {
+      const tick = async () => {
+        if (Date.now() - started > MAX_WAIT_MS) {
+          return reject(new Error('Analysis timed out after 3 minutes. Please try again.'));
+        }
+        try {
+          const { data: { session: s } } = await supabase.auth.getSession();
+          const res = await fetch(`${API_BASE}/job/${jobId}`, {
+            headers: { 'Authorization': `Bearer ${s?.access_token}` }
+          });
+          if (!res.ok) throw new Error(`Job poll failed: ${res.statusText}`);
+          const job = await res.json();
+          setJobPhase(job.phase || '');
+          if (job.status === 'completed') return resolve(job.result);
+          if (job.status === 'failed') return reject(new Error(job.error || 'Analysis failed'));
+          setTimeout(tick, POLL_INTERVAL);
+        } catch (err) {
+          reject(err);
+        }
+      };
+      setTimeout(tick, POLL_INTERVAL); // First poll after 2.5s
+    });
+  };
+
   const handleUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
     setLoading({ ...loading, extracting: true });
+    setJobPhase('Uploading document...');
     try {
       const fd = new FormData();
       fd.append('file', file);
-      // Pass null to force callBackend to fetch it fresh
-      const data = await callBackend("/extract", fd, true, null);
+      const { job_id } = await callBackend("/extract", fd, true, null);
+      setJobPhase('Reading document...');
+      const data = await pollJob(job_id);
       setPolicy(data);
     } catch (err) { toast.error(err.message); }
-    finally { setLoading({ ...loading, extracting: false }); }
+    finally { setLoading({ ...loading, extracting: false }); setJobPhase(''); }
   };
 
   const handleCompare = async () => {
     setLoading({ ...loading, comparing: true });
+    setJobPhase('Starting analysis...');
     try {
-      // Pass null to force callBackend to fetch it fresh
-      const data = await callBackend("/compare", policy, false, null);
+      const { job_id } = await callBackend("/compare", policy, false, null);
+      const data = await pollJob(job_id);
       setReport(data);
 
       // Update URL with newly generated ID to enable persistent chat and shareable links
@@ -375,7 +411,7 @@ export default function Analyzer({ session, fullName }) {
       // Initialize chat with a welcome message
       setChatMessages([{ role: 'ai', text: `Hello${fullName ? ' ' + fullName.split(' ')[0] : ''}! I've generated your report and saved it to your Dashboard. Do you have any specific questions about the analysis or recommendations?` }]);
     } catch (err) { toast.error(err.message); }
-    finally { setLoading({ ...loading, comparing: false }); }
+    finally { setLoading({ ...loading, comparing: false }); setJobPhase(''); }
   };
 
   // [NEW] Handle Chat Submit
@@ -631,7 +667,7 @@ export default function Analyzer({ session, fullName }) {
               <div className="text-6xl mb-6 group-hover:scale-110 transition transform duration-300">{loading.extracting ? "⏳" : "📄"}</div>
 
               <h3 className="text-xl font-bold text-slate-700 mb-2">
-                {loading.extracting ? "Reading Document..." : "Click to Upload Policy PDF/Image"}
+                {loading.extracting ? (jobPhase || 'Reading Document...') : 'Click to Upload Policy PDF/Image'}
               </h3>
               <p className="text-sm text-slate-400 mb-8">Supports: PDF, JPG, PNG</p>
 
@@ -794,7 +830,7 @@ export default function Analyzer({ session, fullName }) {
                   disabled={!policy.company || loading.comparing || (hasSeniorCitizen(policy) && policy.has_medical_history === undefined)}
                   className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 text-white py-4 rounded-xl font-bold uppercase text-sm tracking-widest hover:from-blue-700 hover:to-indigo-700 hover:shadow-lg hover:shadow-indigo-200 transition transform hover:-translate-y-0.5 disabled:opacity-70 disabled:cursor-not-allowed"
                 >
-                  {loading.comparing ? "Generating Report..." : "Generate Analysis Report"}
+                  {loading.comparing ? (jobPhase || 'Generating Report...') : 'Generate Analysis Report'}
                 </button>
               </div>
             )}
