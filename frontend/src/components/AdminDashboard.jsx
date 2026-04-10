@@ -58,42 +58,44 @@ export default function AdminDashboard({ session, fullName }) {
         setDeleteConfirmId(id);
     };
 
-    const confirmDeleteAnalysis = async () => {
+    const confirmDeleteAnalysis = () => {
         if (!deleteConfirmId) return;
 
-        try {
-            const id = deleteConfirmId;
-            const { data: { session: freshSession } } = await supabase.auth.getSession();
-            const token = freshSession?.access_token;
+        const id = deleteConfirmId;
 
-            const res = await fetch(`${API_BASE}/analysis/${id}`, {
-                method: 'DELETE',
-                headers: {
-                    'Authorization': `Bearer ${token}`
-                }
-            });
+        // --- Optimistic UI: remove instantly & close modal ---
+        const previousAnalyses = analyses;
+        setAnalyses(prev => prev.filter(a => a.id !== id));
+        setDeleteConfirmId(null);
+        toast.success("Analysis deleted.");
 
-            if (!res.ok) {
-                const errorText = await res.text();
-                let detail = "Delete failed";
-                try {
-                    const json = JSON.parse(errorText);
-                    if (json.detail) detail = json.detail;
-                } catch {
-                    detail = errorText || detail;
+        // Fire-and-forget API call in background
+        (async () => {
+            try {
+                const { data: { session: freshSession } } = await supabase.auth.getSession();
+                const token = freshSession?.access_token;
+
+                const res = await fetch(`${API_BASE}/analysis/${id}`, {
+                    method: 'DELETE',
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+
+                if (!res.ok) {
+                    const errorText = await res.text();
+                    let detail = "Delete failed";
+                    try {
+                        const json = JSON.parse(errorText);
+                        if (json.detail) detail = json.detail;
+                    } catch { detail = errorText || detail; }
+                    throw new Error(detail);
                 }
-                throw new Error(detail);
+            } catch (error) {
+                console.error('Error deleting policy:', error.message);
+                // Roll back the optimistic removal
+                setAnalyses(previousAnalyses);
+                toast.error("Failed to delete analysis: " + error.message);
             }
-
-            // Remove from local state
-            setAnalyses(analyses.filter(a => a.id !== id));
-            toast.success("Analysis deleted successfully.");
-        } catch (error) {
-            console.error('Error deleting policy:', error.message);
-            toast.error("Failed to delete analysis: " + error.message);
-        } finally {
-            setDeleteConfirmId(null);
-        }
+        })();
     };
 
     return (
