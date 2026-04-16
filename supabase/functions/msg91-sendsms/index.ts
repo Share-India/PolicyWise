@@ -58,7 +58,7 @@ Deno.serve(async (req) => {
 
     // Send OTP via MSG91
     console.log("📤 Calling MSG91 API...");
-    const safeTemplateId = (MSG91_TEMPLATE_ID || "69df4bef132297c323058a23").replace(/["']/g, "").trim();
+    const safeTemplateId = MSG91_TEMPLATE_ID.replace(/["']/g, "").trim();
     const safeAuthKey = MSG91_AUTH_KEY.replace(/["']/g, "").trim();
 
     const msg91Response = await fetch("https://control.msg91.com/api/v5/flow/", {
