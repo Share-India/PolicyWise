@@ -8,6 +8,102 @@ import { toast } from 'react-hot-toast';
 // --- THE API BRIDGE ---
 import { API_BASE } from '../config';
 
+// --- HELPER COMPONENT: RESTORE BENEFIT CARD ---
+const RestoreBenefitDetailsCard = ({ value = '', policyText = '' }) => {
+  const text = `${value} ${policyText}`.toLowerCase();
+  
+  // Q1: Same illness?
+  let sameIllness = 'Not Specified';
+  let sameIllnessGood = null;
+  if (text.includes('any illness') || text.includes('related') || text.includes('same illness')) {
+    sameIllness = 'Any Illness ✓'; sameIllnessGood = true;
+  } else if (text.includes('different illness') || text.includes('unrelated only') || text.includes('different disease')) {
+    sameIllness = 'Diff. Illness Only'; sameIllnessGood = false;
+  }
+
+  // Q2: Same person?
+  let samePerson = 'Not Specified';
+  let samePersonGood = null;
+  if (text.includes('same member') || text.includes('same person') || text.includes('any member') || text.includes('any person') || text.includes('floater')) {
+    samePerson = 'Any Person ✓'; samePersonGood = true;
+  } else if (text.includes('different member') || text.includes('different person')) {
+    samePerson = 'Diff. Person Only'; samePersonGood = false;
+  }
+
+  // Q3: Unlimited or once?
+  let frequency = 'Not Specified';
+  let frequencyGood = null;
+  if (text.includes('unlimited')) {
+    frequency = 'Unlimited ✓'; frequencyGood = true;
+  } else if (text.includes('once') || text.includes('1 time') || text.includes('one time')) {
+    frequency = 'Once per Year'; frequencyGood = false;
+  } else if (text.includes('multiple') || text.includes('twice') || text.includes('2 times') || text.includes('two times')) {
+    frequency = 'Multiple Times ✓'; frequencyGood = true;
+  }
+
+  // Q4: After partial or full exhaustion?
+  let trigger = 'Not Specified';
+  let triggerGood = null;
+  if (text.includes('partial') || text.includes('after partial')) {
+    trigger = 'After Partial Use ✓'; triggerGood = true;
+  } else if (text.includes('full exhaustion') || text.includes('after exhaustion') || text.includes('not on first claim') || text.includes('after the first')) {
+    trigger = 'After Full Use Only'; triggerGood = null; // neutral — this is standard
+  }
+
+  const items = [
+    { label: 'Same Illness?', answer: sameIllness, good: sameIllnessGood },
+    { label: 'Same Person?', answer: samePerson, good: samePersonGood },
+    { label: 'Frequency', answer: frequency, good: frequencyGood },
+    { label: 'Activation', answer: trigger, good: triggerGood },
+  ];
+
+  // If all 4 are unresolved, the policy text is too generic to parse — show a friendly fallback
+  const allUnresolved = items.every(it => it.good === null);
+
+  return (
+    <div className="mt-4 bg-gradient-to-r from-teal-50 to-indigo-50/30 rounded-xl p-4 border border-teal-100/50 shadow-sm w-full">
+      <div className="flex items-center gap-2 mb-3">
+        <span className="text-teal-600 bg-teal-100 p-1 rounded-md text-xs">🔍</span>
+        <h5 className="font-bold text-teal-800 text-xs uppercase tracking-widest">Restore Benefit Conditions</h5>
+      </div>
+
+      {allUnresolved ? (
+        <div className="flex items-start gap-3 bg-white/60 rounded-lg p-3 border border-slate-100">
+          <span className="text-base mt-0.5">📋</span>
+          <div>
+            <p className="text-xs font-bold text-slate-600 mb-1">Specific conditions not mentioned in the document</p>
+            <p className="text-[11px] text-slate-500 leading-relaxed">
+              The policy document does not explicitly state the restore conditions (same illness, same person, frequency, activation). Before relying on this benefit, ask your insurer:
+            </p>
+            <ul className="mt-2 space-y-1">
+              {['Is restore allowed for the same illness?', 'Is restore allowed for the same person?', 'Is restore unlimited or once per year?', 'Does restore activate after partial or full use?'].map((q, i) => (
+                <li key={i} className="flex items-center gap-1.5 text-[11px] text-slate-600 font-medium">
+                  <span className="text-amber-500 text-xs">→</span> {q}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 md:grid-cols-4 print:grid-cols-4 gap-3">
+          {items.map((it, i) => (
+            <div key={i} className="bg-white/60 rounded-lg p-2.5 border border-white">
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">{it.label}</p>
+              <p className={`text-xs font-bold leading-tight ${it.good === true ? 'text-emerald-600' : it.good === false ? 'text-amber-600' : 'text-slate-600'}`}>
+                {it.answer}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <p className="text-[10px] text-teal-700 mt-3 italic opacity-80 leading-relaxed">
+        *Actual conditions may vary by policy terms. Always verify with your insurer before claiming.
+      </p>
+    </div>
+  );
+};
+
 const callBackend = async (endpoint, body, isFile = false, token = null) => {
   // ensure we always have a fresh token if possible
   let activeToken = token;
@@ -133,6 +229,41 @@ const SI_ANALYSIS_DATA = [
   }
 ];
 
+// --- HELPER: Compute the EFFECTIVE sum insured (Base + Bonuses - Deductibles) ---
+// This is the single source of truth for what the policyholder actually gets.
+const getEffectiveSITotal = (policy) => {
+  const components = policy?.sum_insured?.components || [];
+  let additiveTotal = 0;
+  let subtractiveTotal = 0;
+  let hasComponents = false;
+
+  for (const comp of components) {
+    if (!comp.value || !comp.label) continue;
+    const val = parseFloat(comp.value.replace(/[^0-9.]/g, '')) || 0;
+    const label = comp.label.toLowerCase();
+
+    if (val > 0) {
+      hasComponents = true;
+      if (label.includes('deductible') || label.includes('co-pay')) {
+        subtractiveTotal += val;
+      } else {
+        additiveTotal += val;
+      }
+    }
+  }
+
+  if (hasComponents) {
+    const finalDynamicTotal = additiveTotal - subtractiveTotal;
+    if (finalDynamicTotal > 0) {
+      return finalDynamicTotal; // Returns raw number (e.g. 4500000)
+    }
+  }
+
+  // Fallback: parse the raw total string
+  const raw = String(policy?.sum_insured?.total || '0').replace(/,/g, '');
+  return parseFloat(raw.replace(/[^0-9.]/g, '')) || 0;
+};
+
 const getSumInsuredAnalysis = (amountStr) => {
   if (!amountStr) return null;
   // Parse amount string (e.g. "5L", "500000", "1 Cr", "1.5 Crore") into Lakhs
@@ -166,6 +297,59 @@ const hasSeniorCitizen = (policy) => {
     const ageNum = parseInt(String(p.age || '0').replace(/[^0-9]/g, ''));
     return ageNum > 55;
   });
+};
+
+// --- ANALYSIS STAGE CONFIG ---
+const ANALYSIS_STAGES = [
+  {
+    id: 'upload',
+    label: 'Document Received',
+    sublabel: 'Your policy file has been uploaded securely',
+    icon: '📄',
+    matchPhase: ['Uploading document...', 'Reading document...'],
+  },
+  {
+    id: 'extract',
+    label: 'Extracting Policy Data',
+    sublabel: 'AI is reading and parsing your policy details',
+    icon: '🔍',
+    matchPhase: ['Reading document...'],
+  },
+  {
+    id: 'analyse',
+    label: 'Running AI Analysis',
+    sublabel: 'Comparing coverage, features & benefits in parallel',
+    icon: '🧠',
+    matchPhase: ['Starting analysis...', 'Running AI analysis (Pass 1 & 2 in parallel)...'],
+  },
+  {
+    id: 'report',
+    label: 'Generating Report',
+    sublabel: 'Compiling your personalised policy insights',
+    icon: '📊',
+    matchPhase: ['Generating analysis report...'],
+  },
+  {
+    id: 'done',
+    label: 'Analysis Complete',
+    sublabel: 'Your detailed report is ready',
+    icon: '✅',
+    matchPhase: ['Done'],
+  },
+];
+
+const getActiveStageIndex = (phase, isExtracting, isComparing) => {
+  if (!phase) {
+    if (isExtracting) return 0;
+    if (isComparing) return 2;
+    return -1;
+  }
+  for (let i = ANALYSIS_STAGES.length - 1; i >= 0; i--) {
+    if (ANALYSIS_STAGES[i].matchPhase.some(p => phase.toLowerCase().includes(p.toLowerCase().slice(0, 10)))) {
+      return i;
+    }
+  }
+  return isExtracting ? 1 : isComparing ? 2 : -1;
 };
 
 // --- THE MAIN APP ---
@@ -401,6 +585,11 @@ export default function Analyzer({ session, fullName }) {
     try {
       const { job_id } = await callBackend("/compare", policy, false, null);
       const data = await pollJob(job_id);
+
+      // Flash the "Analysis Complete" step for 1.5s so users see all stages complete
+      setJobPhase('Done');
+      await new Promise(res => setTimeout(res, 1500));
+
       setReport(data);
 
       // Update URL with newly generated ID to enable persistent chat and shareable links
@@ -747,37 +936,9 @@ export default function Analyzer({ session, fullName }) {
                     <span className="text-sm font-bold text-slate-700">Total Sum Insured:</span>
                     <span className="text-xl font-black text-slate-900">
                       {(() => {
-                        let total = policy.sum_insured?.total || "---";
-                        const components = policy.sum_insured?.components || [];
-                        let additiveTotal = 0;
-                        let subtractiveTotal = 0;
-                        let hasComponents = false;
-                        
-                        for (const comp of components) {
-                            if (!comp.value || !comp.label) continue;
-                            const val = parseFloat(comp.value.replace(/[^0-9.]/g, '')) || 0;
-                            const label = comp.label.toLowerCase();
-                            
-                            if (val > 0) {
-                                hasComponents = true;
-                                // Structurally subtract deductibles
-                                if (label.includes('deductible') || label.includes('co-pay')) {
-                                    subtractiveTotal += val;
-                                } else {
-                                    // Add all other benefits (Base Sum Insured, NCB, Recharge, Bonuses)
-                                    additiveTotal += val;
-                                }
-                            }
-                        }
-                        
-                        if (hasComponents) {
-                            const finalDynamicTotal = additiveTotal - subtractiveTotal;
-                            // Ensure the total makes sense, then override the AI's plain text prediction
-                            if (finalDynamicTotal > 0) {
-                                return finalDynamicTotal.toLocaleString('en-IN');
-                            }
-                        }
-                        return total;
+                        const effective = getEffectiveSITotal(policy);
+                        if (effective > 0) return effective.toLocaleString('en-IN');
+                        return policy.sum_insured?.total || "---";
                       })()}
                     </span>
                   </div>
@@ -830,8 +991,82 @@ export default function Analyzer({ session, fullName }) {
                   disabled={!policy.company || loading.comparing || (hasSeniorCitizen(policy) && policy.has_medical_history === undefined)}
                   className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 text-white py-4 rounded-xl font-bold uppercase text-sm tracking-widest hover:from-blue-700 hover:to-indigo-700 hover:shadow-lg hover:shadow-indigo-200 transition transform hover:-translate-y-0.5 disabled:opacity-70 disabled:cursor-not-allowed"
                 >
-                  {loading.comparing ? (jobPhase || 'Generating Report...') : 'Generate Analysis Report'}
+                  {loading.comparing
+                    ? <span className="flex items-center justify-center gap-3"><span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>GENERATING ANALYSIS REPORT...</span>
+                    : 'Generate Analysis Report'
+                  }
                 </button>
+
+                {/* ── ANIMATED PROGRESS PANEL ── */}
+                {loading.comparing && (() => {
+                  const compareStages = ANALYSIS_STAGES.filter(s => ['analyse', 'report', 'done'].includes(s.id));
+                  const activeIdx = getActiveStageIndex(jobPhase, false, true);
+                  // Map the global idx back to the compare-only list
+                  const compareGlobalIds = ['analyse', 'report', 'done'];
+                  const localActive = compareGlobalIds.findIndex(id =>
+                    id === (ANALYSIS_STAGES[activeIdx]?.id)
+                  );
+                  return (
+                    <div className="mt-5 bg-white rounded-2xl border border-indigo-100 shadow-lg overflow-hidden">
+                      {/* Top shimmer bar */}
+                      <div className="h-1 w-full bg-gradient-to-r from-blue-500 via-indigo-500 to-purple-500 animate-pulse" />
+
+                      <div className="px-6 py-5">
+                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Analysis Progress</p>
+
+                        <div className="space-y-4">
+                          {compareStages.map((stage, i) => {
+                            const isDone = i < localActive;
+                            const isActive = i === localActive || (localActive === -1 && i === 0);
+                            const isPending = !isDone && !isActive;
+                            return (
+                              <div key={stage.id} className="flex items-center gap-4">
+                                {/* Step icon circle */}
+                                <div className={`relative flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center text-lg transition-all duration-500
+                                  ${isDone ? 'bg-emerald-100 ring-2 ring-emerald-400' : ''}
+                                  ${isActive ? 'bg-indigo-100 ring-2 ring-indigo-400 shadow-lg shadow-indigo-100' : ''}
+                                  ${isPending ? 'bg-slate-100 opacity-40' : ''}
+                                `}>
+                                  {isDone ? '✅' : stage.icon}
+                                  {isActive && (
+                                    <span className="absolute inset-0 rounded-full ring-2 ring-indigo-400 animate-ping opacity-30" />
+                                  )}
+                                </div>
+
+                                {/* Text */}
+                                <div className="flex-1 min-w-0">
+                                  <p className={`text-sm font-bold truncate transition-colors duration-300
+                                    ${isDone ? 'text-emerald-600' : ''}
+                                    ${isActive ? 'text-indigo-700' : ''}
+                                    ${isPending ? 'text-slate-400' : ''}
+                                  `}>{stage.label}</p>
+                                  <p className={`text-xs truncate transition-opacity duration-300
+                                    ${isActive ? 'text-slate-500 opacity-100' : 'opacity-0'}
+                                  `}>{stage.sublabel}</p>
+                                </div>
+
+                                {/* Status badge */}
+                                <div className="flex-shrink-0">
+                                  {isDone && <span className="text-xs font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">Done</span>}
+                                  {isActive && <span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full border border-indigo-200 animate-pulse">Working…</span>}
+                                  {isPending && <span className="text-xs font-bold text-slate-400 bg-slate-50 px-2 py-0.5 rounded-full border border-slate-200">Pending</span>}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+
+                        {/* Current action text */}
+                        {jobPhase && jobPhase !== 'Done' && (
+                          <div className="mt-5 pt-4 border-t border-slate-100 flex items-center gap-2">
+                            <span className="inline-block w-2 h-2 bg-indigo-500 rounded-full animate-pulse" />
+                            <p className="text-xs text-slate-500 font-medium italic">{jobPhase}</p>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
             )}
           </div>
@@ -840,7 +1075,9 @@ export default function Analyzer({ session, fullName }) {
         {/* SUM INSURED ANALYSIS CARD */}
         {
           policy.sum_insured?.total && report && (() => {
-            const analysis = getSumInsuredAnalysis(policy.sum_insured.total);
+            // Use the EFFECTIVE total (Base - Deductibles) so the badge matches the display
+            const effectiveTotal = getEffectiveSITotal(policy);
+            const analysis = getSumInsuredAnalysis(effectiveTotal > 0 ? String(effectiveTotal) : policy.sum_insured.total);
             if (!analysis) return null;
 
             // [MODIFIED] Dynamic Color Theme
@@ -1094,6 +1331,11 @@ export default function Analyzer({ session, fullName }) {
                                       "{item.policy_text}"
                                     </div>
                                   )}
+                                  
+                                  {/* [NEW] Restore Benefit Specific Educational Card */}
+                                  {item.feature === 'Restoration Benefit' && (
+                                    <RestoreBenefitDetailsCard value={item.value} policyText={item.policy_text} />
+                                  )}
                                 </div>
                               ))}
                             </div>
@@ -1145,6 +1387,47 @@ export default function Analyzer({ session, fullName }) {
 
               <div className="hidden print:block w-full h-16"></div>
               <div className="space-y-10">
+
+                {/* --- GOOD COVERAGE VERDICT BANNER --- */}
+                {report.coverage_verdict === 'good' ? (
+                  <div className="relative bg-gradient-to-br from-emerald-50 via-green-50 to-teal-50 border-2 border-emerald-200 rounded-3xl p-10 text-center overflow-hidden shadow-xl">
+                    {/* Decorative background circles */}
+                    <div className="absolute -top-8 -right-8 w-40 h-40 bg-emerald-100 rounded-full opacity-40 pointer-events-none" />
+                    <div className="absolute -bottom-6 -left-6 w-28 h-28 bg-teal-100 rounded-full opacity-40 pointer-events-none" />
+
+                    <div className="relative z-10">
+                      <div className="text-5xl mb-4 animate-bounce">🏆</div>
+                      <h4 className="font-black text-2xl text-emerald-800 mb-2">
+                        {getTargetPossessive(policy)} Plan Is Well-Covered!
+                      </h4>
+                      <p className="text-emerald-700 font-semibold text-base max-w-xl mx-auto leading-relaxed mb-6">
+                        Based on our comprehensive analysis, {getTargetName(policy) === 'You' ? 'your' : `${getTargetName(policy)}'s`} current policy scores <strong>{report.product_score}/10</strong> — indicating strong, comprehensive coverage. There are no significant gaps that would warrant switching or upgrading at this time.
+                      </p>
+
+                      <div className="grid grid-cols-3 gap-4 max-w-lg mx-auto mb-6">
+                        <div className="bg-white/70 rounded-2xl p-4 border border-emerald-100 shadow-sm">
+                          <div className="text-2xl font-black text-emerald-600">{report.product_score}/10</div>
+                          <div className="text-[10px] font-bold text-emerald-500 uppercase tracking-widest mt-1">Coverage Score</div>
+                        </div>
+                        <div className="bg-white/70 rounded-2xl p-4 border border-emerald-100 shadow-sm">
+                          <div className="text-2xl font-black text-emerald-600">
+                            {report.feature_analysis?.filter(f => f.status === 'Positive').length || '—'}
+                          </div>
+                          <div className="text-[10px] font-bold text-emerald-500 uppercase tracking-widest mt-1">Features Covered</div>
+                        </div>
+                        <div className="bg-white/70 rounded-2xl p-4 border border-emerald-100 shadow-sm">
+                          <div className="text-2xl font-black text-emerald-600">✓</div>
+                          <div className="text-[10px] font-bold text-emerald-500 uppercase tracking-widest mt-1">No Action Needed</div>
+                        </div>
+                      </div>
+
+                      <p className="text-sm text-emerald-600 font-medium">
+                        💡 If you ever have questions about your policy benefits, use the <strong>AI Chat</strong> below.
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <>
                 <h4 className="font-bold text-2xl text-slate-800 ml-1 border-l-8 border-blue-600 pl-4">
                   Top Recommendations for {getTargetName(policy) === 'You' ? 'You' : getTargetName(policy)}
                 </h4>
@@ -1233,6 +1516,8 @@ export default function Analyzer({ session, fullName }) {
                     </div>
                   );
                 })()}
+                  </>
+                )}
               </div>
 
               {/* Action Buttons - Bottom */}

@@ -2084,16 +2084,61 @@ async def _compare_policy_core(data: dict, user: dict):
                     "recommendations": []
                  }
 
-        # Enforce cons >= pros logic (Sales Perspective)
-        # Ensure pros are never more than cons to prevent the plan looking "too good" to switch from.
+        # Limit pros/cons to a clean display length (no artificial suppression)
         if "pros" in result and "cons" in result:
-             # STRICT LIMIT: Max 7 items each
             result["pros"] = result["pros"][:7]
             result["cons"] = result["cons"][:7]
 
-            if len(result["pros"]) > len(result["cons"]):
-                # Truncate pros to match the length of cons
-                result["pros"] = result["pros"][:len(result["cons"])]
+        # --- COVERAGE VERDICT: Suppress recommendations if plan is already good ---
+        # Default threshold is 7.5, but relaxed to 7.0 when EFFECTIVE SI is "Optimal" (>= 50L)
+        # because high SI alone is a strong signal of a well-funded plan.
+        current_score = result.get("product_score", 0)
+
+        # Compute EFFECTIVE SI (Base + Bonuses - Deductibles/Co-pay) from components
+        # This mirrors the frontend's getEffectiveSITotal() logic exactly.
+        try:
+            si_components = data.get("sum_insured", {}).get("components", [])
+            additive_total = 0
+            subtractive_total = 0
+            has_components = False
+
+            for comp in si_components:
+                label = str(comp.get("label", "")).lower()
+                val_str = str(comp.get("value", "0")).replace(",", "")
+                val = float(''.join(c for c in val_str if c.isdigit() or c == '.') or "0")
+                if val > 0:
+                    has_components = True
+                    if "deductible" in label or "co-pay" in label or "copay" in label:
+                        subtractive_total += val
+                    else:
+                        additive_total += val
+
+            if has_components and (additive_total - subtractive_total) > 0:
+                si_numeric = int(additive_total - subtractive_total)
+            else:
+                # Fallback: parse the raw total string
+                si_raw = str(data.get("sum_insured", {}).get("total", "0")).replace(",", "").strip()
+                si_numeric = int(''.join(c for c in si_raw if c.isdigit()) or "0")
+        except Exception:
+            si_numeric = 0
+
+        print(f"DEBUG: Effective SI = {si_numeric} (₹{si_numeric/100000:.1f}L)")
+
+        HIGH_SI_THRESHOLD = 5_000_000  # 50 Lakhs
+        if si_numeric >= HIGH_SI_THRESHOLD:
+            GOOD_COVERAGE_THRESHOLD = 7.0  # Relaxed: big SI = already well-protected
+            print(f"DEBUG: SI={si_numeric} >= {HIGH_SI_THRESHOLD} (50L) → Using relaxed threshold 7.0")
+        else:
+            GOOD_COVERAGE_THRESHOLD = 7.5  # Standard threshold
+            print(f"DEBUG: SI={si_numeric} < {HIGH_SI_THRESHOLD} (50L) → Using standard threshold 7.5")
+
+        if current_score >= GOOD_COVERAGE_THRESHOLD:
+            result["coverage_verdict"] = "good"
+            result["recommendations"] = []  # Clear recommendations for well-covered plans
+            print(f"DEBUG: Score {current_score} >= {GOOD_COVERAGE_THRESHOLD} → coverage_verdict='good', recommendations suppressed.")
+        else:
+            result["coverage_verdict"] = "needs_improvement"
+            print(f"DEBUG: Score {current_score} < {GOOD_COVERAGE_THRESHOLD} → coverage_verdict='needs_improvement', recommendations shown.")
 
         try:
             company_stats_map = {}
