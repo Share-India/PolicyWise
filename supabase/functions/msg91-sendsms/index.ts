@@ -1,94 +1,117 @@
-import { Webhook } from "https://esm.sh/svix@1.45.0";
+// Simplified MSG91 SMS Integration (No Signature Verification - For Testing Only)
+// Use this version to test if the payload structure is correct
+// WARNING: This version does NOT verify the webhook signature!
 
-// These variables will be securely configured in your Supabase Dashboard
-const WEBHOOK_SECRET = Deno.env.get("SEND_SMS_HOOK_SECRET")!;
 const MSG91_AUTH_KEY = Deno.env.get("MSG91_AUTH_KEY")!;
 const MSG91_TEMPLATE_ID = Deno.env.get("MSG91_TEMPLATE_ID")!;
 
 Deno.serve(async (req) => {
-  const payload = await req.text();
-  const headers = Object.fromEntries(req.headers);
-
-  // 1. Verify the webhook signature safely
-  let event;
   try {
-    // TEMPORARY DEBUG BYPASS: We are bypassing svix security to test if MSG91 actually works!
-    // const cleanSecret = WEBHOOK_SECRET.trim().replace(/^"|"$/g, '').replace(/'/g, '').replace(/\\n/g, '');
-    // const wh = new Webhook(cleanSecret);
-    // event = wh.verify(payload, headers) as {
+    console.log("📥 Received SMS OTP webhook request");
     
-    // Directly parse the payload
-    event = JSON.parse(payload);
+    // Parse the incoming payload
+    const payload = await req.text();
+    console.log("📄 Raw payload:", payload);
+    
+    let webhookData;
+    try {
+      webhookData = JSON.parse(payload);
+      console.log("📦 Parsed webhook data:", JSON.stringify(webhookData, null, 2));
+    } catch (err) {
+      console.error("❌ Failed to parse JSON:", err);
+      return new Response(
+        JSON.stringify({ 
+          error: { 
+            http_code: 400, 
+            message: "Invalid JSON payload" 
+          } 
+        }),
+        { status: 400, headers: { "Content-Type": "application/json" } }
+      );
+    }
 
-  } catch (err: any) {
-    console.error("Payload parsing failed:", err.message);
+    // Extract phone and OTP from Supabase Auth webhook payload
+    // During an updateUser phone flow, the new unverified phone is stored in new_phone instead of phone.
+    const phone = webhookData.user?.phone || webhookData.user?.new_phone || webhookData.user?.phone_change;
+    const otp = webhookData.sms?.otp;
+    
+    console.log("📱 Extracted phone:", phone);
+    console.log("🔢 Extracted OTP:", otp);
+    
+    if (!phone || !otp) {
+      console.error("❌ Missing phone or OTP");
+      console.log("Available data:", JSON.stringify(webhookData, null, 2));
+      return new Response(
+        JSON.stringify({ 
+          error: { 
+            http_code: 400, 
+            message: `Missing required fields. Phone: ${phone}, OTP: ${otp}` 
+          } 
+        }), 
+        { status: 400, headers: { "Content-Type": "application/json" } }
+      );
+    }
+
+    // Clean phone number (remove '+' for MSG91)
+    const cleanPhone = phone.replace(/^\+/, "");
+    console.log("📞 Sending to clean phone:", cleanPhone);
+
+    // Send OTP via MSG91
+    console.log("📤 Calling MSG91 API...");
+    const safeTemplateId = (MSG91_TEMPLATE_ID || "69df4bef132297c323058a23").replace(/["']/g, "").trim();
+    const safeAuthKey = MSG91_AUTH_KEY.replace(/["']/g, "").trim();
+
+    const msg91Response = await fetch("https://control.msg91.com/api/v5/flow/", {
+      method: "POST",
+      headers: {
+        "authkey": safeAuthKey,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        template_id: safeTemplateId,
+        short_url: "0",
+        recipients: [
+          {
+            mobiles: String(cleanPhone),
+            var: "PolicyWise",
+            var1: String(otp)
+          }
+        ]
+      })
+    });
+
+    const msg91Data = await msg91Response.json();
+    console.log("📨 MSG91 Response:", JSON.stringify(msg91Data, null, 2));
+
+    if (msg91Data.type === "error") {
+      console.error("❌ MSG91 Error:", msg91Data.message);
+      throw new Error(`MSG91: ${msg91Data.message}`);
+    }
+
+    console.log("✅ SMS sent successfully!");
+    
+    // Return success (empty object as per Supabase Auth requirements)
     return new Response(
-      JSON.stringify({ error: { http_code: 400, message: `Payload parsing failed: ${err.message}` } }),
-      { status: 400, headers: { "Content-Type": "application/json" } }
+      JSON.stringify({}), 
+      { 
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      }
+    );
+    
+  } catch (error) {
+    console.error("❌ Error:", error);
+    return new Response(
+      JSON.stringify({ 
+        error: { 
+          http_code: 400, 
+          message: error instanceof Error ? error.message : "Unknown error" 
+        } 
+      }), 
+      { 
+        status: 400, 
+        headers: { "Content-Type": "application/json" } 
+      } 
     );
   }
-
-  // Extract phone and OTP from the verified Supabase payload
-  const phone = event.user?.phone;
-  const otp = event.sms?.otp;
-  
-  if (!phone || !otp) {
-    return new Response(
-      JSON.stringify({ error: { http_code: 400, message: "Missing phone or OTP in payload" } }), 
-      { status: 400, headers: { "Content-Type": "application/json" } }
-    );
-  }
-
-  // MSG91 prefers mobile numbers without the '+' sign
-  const cleanPhone = phone.replace("+", "");
-
-  // 2. Call MSG91 SendOTP API (v5)
-  // === MSG91 Setup Commented Out as requested ===
-  // try {
-  //   console.log(`Attempting to send OTP via MSG91 to ${cleanPhone}`);
-  //   
-  //   // We send extra variables to support the DLT template requirements
-  //   const response = await fetch("https://control.msg91.com/api/v5/otp", {
-  //     method: "POST",
-  //     headers: {
-  //       "authkey": MSG91_AUTH_KEY,
-  //       "Content-Type": "application/json"
-  //     },
-  //     body: JSON.stringify({
-  //       template_id: MSG91_TEMPLATE_ID,
-  //       mobile: cleanPhone,
-  //       otp: otp,
-  //       name: "User",
-  //       project: "PolicyWise"
-  //     })
-  //   });
-  //
-  //   const data = await response.json();
-  //   console.log("MSG91 API Response:", data);
-  //
-  //   if (data.type === "error") {
-  //     throw new Error(`MSG91 returned an error: ${data.message}`);
-  //   }
-  //
-  //   // For success, GoTrue expects a 200 OK with no body.
-  //   return new Response(null, { 
-  //     status: 200
-  //   });
-  //   
-  // } catch (error: any) {
-  //   console.error("Failed to execute MSG91 call:", error);
-  //   return new Response(
-  //     JSON.stringify({ error: { http_code: 400, message: `MSG91 Error: ${error.message}` } }), 
-  //     { status: 400, headers: { "Content-Type": "application/json" } } 
-  //   );
-  // }
-
-  // Fallback response since MSG91 is commented out
-  return new Response(JSON.stringify({ 
-    success: false, 
-    error: "MSG91 Hook is disabled. To use Twilio natively, please disable the Custom SMS Hook in your Supabase Dashboard." 
-  }), { 
-    status: 500,
-    headers: { "Content-Type": "application/json" }
-  });
 });
