@@ -566,6 +566,15 @@ export default function Analyzer({ session, fullName }) {
   const handleUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
+    
+    // Check file size (10MB limit)
+    const MAX_SIZE = 10 * 1024 * 1024;
+    if (file.size > MAX_SIZE) {
+      toast.error(`File size exceeds ${(MAX_SIZE / (1024 * 1024)).toFixed(0)}MB limit. Please upload a smaller file.`);
+      e.target.value = null;
+      return;
+    }
+
     setLoading({ ...loading, extracting: true });
     setJobPhase('Uploading document...');
     try {
@@ -852,13 +861,13 @@ export default function Analyzer({ session, fullName }) {
               onClick={() => fileRef.current.click()}
               className="border-2 border-dashed border-blue-200 bg-blue-50/30 rounded-2xl p-16 text-center cursor-pointer hover:bg-blue-50 hover:border-blue-400 transition group"
             >
-              <input type="file" ref={fileRef} onChange={handleUpload} className="hidden" />
+              <input type="file" ref={fileRef} accept=".pdf,.jpg,.jpeg,.png" onChange={handleUpload} className="hidden" />
               <div className="text-6xl mb-6 group-hover:scale-110 transition transform duration-300">{loading.extracting ? "⏳" : "📄"}</div>
 
               <h3 className="text-xl font-bold text-slate-700 mb-2">
                 {loading.extracting ? (jobPhase || 'Reading Document...') : 'Click to Upload Policy PDF/Image'}
               </h3>
-              <p className="text-sm text-slate-400 mb-8">Supports: PDF, JPG, PNG</p>
+              <p className="text-sm text-slate-400 mb-8">Supports: PDF, JPG, PNG (Max: 10MB)</p>
 
               <span className="bg-blue-600 text-white px-8 py-3 rounded-full font-bold shadow-lg shadow-blue-200 group-hover:shadow-blue-300 group-hover:-translate-y-1 transition inline-block">
                 Browse Files

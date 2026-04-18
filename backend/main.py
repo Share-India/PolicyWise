@@ -630,8 +630,9 @@ async def extract_policy(file: UploadFile = File(...), user: dict = Depends(get_
     if len(content) > MAX_UPLOAD_SIZE_BYTES:
         raise HTTPException(status_code=413, detail=f"File too large. Maximum size is {MAX_UPLOAD_SIZE_BYTES / (1024*1024):.1f}MB.")
     kind = filetype.guess(content)
-    if kind is None or kind.mime != "application/pdf":
-        raise HTTPException(status_code=415, detail="Invalid document format. Only valid PDF files are accepted.")
+    allowed_mimes = ["application/pdf", "image/jpeg", "image/png"]
+    if kind is None or kind.mime not in allowed_mimes:
+        raise HTTPException(status_code=415, detail="Invalid document format. Only PDF, JPG, and PNG files are accepted.")
 
     job_id = str(uuid.uuid4())
     JOB_STORE[job_id] = {"status": "processing", "phase": "Reading document...", "result": None, "error": None, "created_at": time.time()}
