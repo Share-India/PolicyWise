@@ -2,7 +2,7 @@
 echo Starting Backend...
 
 REM Check if venv exists
-if not exist "venv" (
+if not exist ".venv" (
     echo Virtual environment not found! Please create it first.
     pause
     exit /b
@@ -10,7 +10,7 @@ if not exist "venv" (
 
 REM Activate the virtual environment using the batch script
 REM This avoids PowerShell execution policy restrictions
-call venv\Scripts\activate.bat
+call .venv\Scripts\activate.bat
 
 REM Upgrade pip just in case (optional, good practice)
 python -m pip install --upgrade pip
