@@ -1,0 +1,106 @@
+{
+  "name": "CYRUS - AI Policy Analysis",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "analyze-policy",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.NEXT_PUBLIC_SUPABASE_URL }}/rest/v1/policy_documents?id=eq.{{ $json.body.documentId }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $env.NEXT_PUBLIC_SUPABASE_ANON_KEY }}" },
+            { "name": "Authorization", "value": "=Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "fetch-doc-metadata",
+      "name": "Fetch Document Metadata",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.NEXT_PUBLIC_SUPABASE_URL }}/storage/v1/object/public/policy-documents/{{ $json[0].file_path }}",
+        "options": {}
+      },
+      "id": "download-policy-file",
+      "name": "Download Policy File",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "model": "={{ $env.AI_MODEL || \"gemini-2.0-flash\" }}",
+        "prompt": "=You are a professional Cyber Insurance Underwriter. Analyze the attached policy document and provide a risk assessment in JSON format. \n\nDocument Context: {{ $node[\"Fetch Document Metadata\"].json[0].file_name }}\n\nFocus on: Limit of Liability, Deductibles, and Key Exclusions.",
+        "options": {
+          "responseMimeType": "application/json"
+        }
+      },
+      "id": "gemini-policy-analysis",
+      "name": "Gemini Policy Analysis",
+      "type": "n8n-nodes-base.googleGemini",
+      "typeVersion": 1,
+      "position": [850, 300],
+      "credentials": {
+        "googleGeminiApi": {
+          "id": "Google Gemini API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.NEXT_PUBLIC_SUPABASE_URL }}/rest/v1/policy_documents?id=eq.{{ $node[\"Webhook\"].json.body.documentId }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $env.NEXT_PUBLIC_SUPABASE_ANON_KEY }}" },
+            { "name": "Authorization", "value": "=Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "bodyParameters": {
+          "parameters": [
+            { "name": "analysis_result", "value": "={{ $json.text }}" },
+            { "name": "analysis_status", "value": "completed" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "update-analysis-status",
+      "name": "Update Analysis Results",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1050, 300]
+    }
+  ],
+  "connections": {
+    "Webhook": { "main": [[{ "node": "fetch-doc-metadata", "type": "main", "index": 0 }]] },
+    "fetch-doc-metadata": { "main": [[{ "node": "download-policy-file", "type": "main", "index": 0 }]] },
+    "download-policy-file": { "main": [[{ "node": "gemini-policy-analysis", "type": "main", "index": 0 }]] },
+    "gemini-policy-analysis": { "main": [[{ "node": "update-analysis-status", "type": "main", "index": 0 }]] }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "2",
+  "id": "1",
+  "meta": { "templateId": "cyrus-policy-analysis" }
+}

@@ -1,0 +1,75 @@
+{
+  "name": "CYRUS - AI Dossier Generation",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "generate-dossier",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.shodan.io/shodan/host/search?key={{ $env.SHODAN_API_KEY }}&query=hostname:{{ $node[\"Webhook\"].json.body.websiteUrl.replace(/^https?:\\/\\//, '').replace(/^www\\./, '') }}",
+        "options": {}
+      },
+      "id": "shodan-recon",
+      "name": "Shodan Recon",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [450, 300],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "model": "={{ $env.AI_MODEL || \"gemini-2.0-flash\" }}",
+        "prompt": "=Generate a comprehensive Cyber Risk Dossier for the organization: {{ $node[\"Webhook\"].json.body.organizationName }}. \n\nTarget Website: {{ $node[\"Webhook\"].json.body.websiteUrl }}\n\nIMPORTANT: You are a professional cyber risk analyst. Synthesize a structured JSON object matching the cyrus_dossier schema. \n\nTECHNICAL CONTEXT (Shodan OSINT):\n{{ JSON.stringify($json) }}\n\nFALLBACK INSTRUCTIONS:\n- If Technical OSINT data is sparse, empty, or unreachable, use your pre-trained general knowledge of this organization to provide a deep threat narrative.\n- Focus on real-world HQ locations, leadership, and revenue scale.\n- Ensure the 'narrative' field is professional, objective, and detailed.\n- Return ONLY the JSON object.",
+        "options": {
+          "responseMimeType": "application/json"
+        }
+      },
+      "id": "gemini-dossier-builder",
+      "name": "Gemini Dossier Builder",
+      "type": "n8n-nodes-base.googleGemini",
+      "typeVersion": 1,
+      "position": [650, 300],
+      "credentials": {
+        "googleGeminiApi": {
+          "id": "Google Gemini API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {
+          "responseCode": 200,
+          "responseBody": "={{ $json }}"
+        }
+      },
+      "id": "respond-to-webhook",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [850, 300]
+    }
+  ],
+  "connections": {
+    "Webhook": { "main": [[{ "node": "shodan-recon", "type": "main", "index": 0 }]] },
+    "shodan-recon": { "main": [[{ "node": "gemini-dossier-builder", "type": "main", "index": 0 }]] },
+    "gemini-dossier-builder": { "main": [[{ "node": "respond-to-webhook", "type": "main", "index": 0 }]] }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "2",
+  "id": "2",
+  "meta": { "templateId": "cyrus-dossier-generation" }
+}

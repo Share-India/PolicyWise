@@ -1,0 +1,92 @@
+{
+  "name": "CYRUS - Master Document Management",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "finalize-audit",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.NEXT_PUBLIC_SUPABASE_URL }}/rest/v1/assessments?id=eq.{{ $json.body.assessmentId }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $env.NEXT_PUBLIC_SUPABASE_ANON_KEY }}" },
+            { "name": "Authorization", "value": "=Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "fetch-assessment-data",
+      "name": "Fetch Assessment Data",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "model": "={{ $env.AI_MODEL || \"gemini-2.0-flash\" }}",
+        "prompt": "=Create a professional Executive Master Docket summary for the following cyber assessment results: \n\n{{ JSON.stringify($json) }}",
+        "options": {
+          "responseMimeType": "text/plain"
+        }
+      },
+      "id": "generate-master-summary",
+      "name": "Generate Master Summary",
+      "type": "n8n-nodes-base.googleGemini",
+      "typeVersion": 1,
+      "position": [650, 300],
+      "credentials": {
+        "googleGeminiApi": {
+          "id": "Google Gemini API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.NEXT_PUBLIC_SUPABASE_URL }}/storage/v1/object/authenticated/final-reports/{{ $node[\"Webhook\"].json.body.assessmentId }}_master_docket.pdf",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $env.NEXT_PUBLIC_SUPABASE_ANON_KEY }}" },
+            { "name": "Authorization", "value": "=Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}" }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+            "parameters": [
+                { "name": "content", "value": "={{ $json.text }}" }
+            ]
+        },
+        "options": {}
+      },
+      "id": "upload-master-docket",
+      "name": "Upload Master Docket",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [850, 300]
+    }
+  ],
+  "connections": {
+    "Webhook": { "main": [[{ "node": "fetch-assessment-data", "type": "main", "index": 0 }]] },
+    "fetch-assessment-data": { "main": [[{ "node": "generate-master-summary", "type": "main", "index": 0 }]] },
+    "generate-master-summary": { "main": [[{ "node": "upload-master-docket", "type": "main", "index": 0 }]] }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "2",
+  "id": "3",
+  "meta": { "templateId": "cyrus-document-management" }
+}

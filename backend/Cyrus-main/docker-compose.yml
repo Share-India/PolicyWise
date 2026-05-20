@@ -1,0 +1,96 @@
+services:
+  # 1. The Next.js Application
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_SUPABASE_URL: "${NEXT_PUBLIC_SUPABASE_URL}"
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: "${NEXT_PUBLIC_SUPABASE_ANON_KEY}"
+        NEXT_PUBLIC_APP_NAME: "${NEXT_PUBLIC_APP_NAME}"
+        NEXT_PUBLIC_COMPANY_NAME: "${NEXT_PUBLIC_COMPANY_NAME}"
+        NEXT_PUBLIC_APP_TAGLINE: "${NEXT_PUBLIC_APP_TAGLINE}"
+        NEXT_PUBLIC_N8N_WEBHOOK_URL: "${NEXT_PUBLIC_N8N_WEBHOOK_URL}"
+    container_name: cyrus_app
+    restart: always
+    env_file: .env.local
+    ports:
+      - "3001:3000"
+    environment:
+      - NODE_ENV=production
+      - N8N_WEBHOOK_URL=http://n8n:5678/webhook
+    networks:
+      - cyrus_network
+
+  # 2. n8n Database (Postgres)
+  db:
+    image: postgres:16-alpine
+    container_name: cyrus_n8n_db
+    restart: always
+    environment:
+      - POSTGRES_USER=cyrus_admin
+      - POSTGRES_PASSWORD=cyrus_vault_pass
+      - POSTGRES_DB=n8n_data
+    volumes:
+      - n8n_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U cyrus_admin -d n8n_data" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - cyrus_network
+
+  # 3. n8n Automation Engine
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: cyrus_n8n_automation
+    restart: always
+    env_file: .env.local
+    ports:
+      - "5678:5678"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_DATABASE=n8n_data
+      - DB_POSTGRESDB_HOST=db
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_USER=cyrus_admin
+      - DB_POSTGRESDB_PASSWORD=cyrus_vault_pass
+
+      # AI & OSINT Propagation
+      - GOOGLE_GENERATIVE_AI_API_KEY=${GOOGLE_GENERATIVE_AI_API_KEY}
+      - SHODAN_API_KEY=${SHODAN_API_KEY}
+      - AI_MODEL=${AI_MODEL:-gemini-2.0-flash}
+
+      - N8N_BLOCK_ENV_ACCESS_IN_EXPRESSIONS=false
+      
+      - N8N_HOST=n8n
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - N8N_SECURE_COOKIE=false
+      - WEBHOOK_URL=http://n8n:5678/
+      - NODE_ENV=production
+
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=${N8N_USER:-admin}
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_PASSWORD:-CyrusAutomation123!}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5678/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - n8n_app_data:/home/node/.n8n
+    networks:
+      - cyrus_network
+
+networks:
+  cyrus_network:
+    driver: bridge
+
+volumes:
+  n8n_db_data:
+  n8n_app_data:
