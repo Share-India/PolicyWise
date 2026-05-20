@@ -11,7 +11,7 @@ import { API_BASE } from '../config';
 // --- HELPER COMPONENT: RESTORE BENEFIT CARD ---
 const RestoreBenefitDetailsCard = ({ value = '', policyText = '' }) => {
   const text = `${value} ${policyText}`.toLowerCase();
-  
+
   // Q1: Same illness?
   let sameIllness = 'Not Specified';
   let sameIllnessGood = null;
@@ -566,7 +566,7 @@ export default function Analyzer({ session, fullName }) {
   const handleUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    
+
     // Check file size (10MB limit)
     const MAX_SIZE = 10 * 1024 * 1024;
     if (file.size > MAX_SIZE) {
@@ -626,10 +626,8 @@ export default function Analyzer({ session, fullName }) {
     try {
       const response = await callBackend("/chat", {
         message: userMsg,
-        policy: policy,
-        report: report,
         history: chatMessages.slice(1),
-        analysis_id: analysisId || report?.db_analysis_id, // Always connect to report if open
+        analysis_id: analysisId || report?.db_analysis_id, // Fetch server-side to avoid Cloudflare WAF block
         chat_db_id: savedChats.find(c => c.id === activeChatId)?.db_id // Pass UUID if we have it
       }, false, null);
 
@@ -824,22 +822,22 @@ export default function Analyzer({ session, fullName }) {
 
         {/* [NEW] Print-Only Header */}
         <div className="hidden print:grid grid-cols-3 items-center border-b-2 border-slate-200 pb-6 mb-8">
-           <div className="flex justify-start">
-               <img src="/logo3.png" alt="Share India" className="h-12 object-contain" />
-           </div>
-           <div className="text-center">
-               <h1 className="text-3xl font-black text-slate-800 mb-1">PolicyWise</h1>
-               <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Smart AI Insurance Analysis</p>
-           </div>
-           <div className="flex justify-end">
-               <div className="text-right bg-slate-50 px-4 py-2 rounded-xl border border-slate-100 inline-block">
-                 <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Support Contact</p>
-                 <div className="flex items-center gap-2 text-slate-800 font-black justify-end">
-                   <span className="text-sm">📞</span>
-                   <span>1800-210-2022</span>
-                 </div>
-               </div>
-           </div>
+          <div className="flex justify-start">
+            <img src="/logo3.png" alt="Share India" className="h-12 object-contain" />
+          </div>
+          <div className="text-center">
+            <h1 className="text-3xl font-black text-slate-800 mb-1">PolicyWise</h1>
+            <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Smart AI Insurance Analysis</p>
+          </div>
+          <div className="flex justify-end">
+            <div className="text-right bg-slate-50 px-4 py-2 rounded-xl border border-slate-100 inline-block">
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Support Contact</p>
+              <div className="flex items-center gap-2 text-slate-800 font-black justify-end">
+                <span className="text-sm">📞</span>
+                <span>1800-210-2022</span>
+              </div>
+            </div>
+          </div>
         </div>
 
         {/* [NEW] Centered Heading */}
@@ -1309,45 +1307,45 @@ export default function Analyzer({ session, fullName }) {
 
                           {/* Collapsible Feature List — always rendered so print always shows all features */}
                           <div className={`divide-y divide-slate-50 border-t border-slate-100 ${isOpen ? 'block' : 'hidden'} print:!block`}>
-                              {groups[cat].map((item, idx) => (
-                                <div key={idx} className="px-6 py-4 flex flex-col hover:bg-slate-50 transition-colors">
-                                  <div className="flex items-center justify-between">
-                                    <div className="pr-4">
-                                      <p className="font-bold text-slate-700 text-sm">
-                                        {item.feature}
+                            {groups[cat].map((item, idx) => (
+                              <div key={idx} className="px-6 py-4 flex flex-col hover:bg-slate-50 transition-colors">
+                                <div className="flex items-center justify-between">
+                                  <div className="pr-4">
+                                    <p className="font-bold text-slate-700 text-sm">
+                                      {item.feature}
+                                    </p>
+                                    {item.explanation && (
+                                      <p className="text-xs text-slate-400 mt-1 mb-1.5 leading-relaxed pr-2">
+                                        {item.explanation}
                                       </p>
-                                      {item.explanation && (
-                                        <p className="text-xs text-slate-400 mt-1 mb-1.5 leading-relaxed pr-2">
-                                          {item.explanation}
-                                        </p>
-                                      )}
-                                      <p className="text-xs text-slate-800 font-medium">{item.value}</p>
-                                    </div>
-                                    <div className="shrink-0 ml-4">
-                                      {item.status === "Positive" ? (
-                                        <span className="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-600 shadow-sm text-lg" title={`Score Weight: ${item.score_weight || 'N/A'}`}>✓</span>
-                                      ) : (
-                                        <span className="w-8 h-8 rounded-full bg-rose-100 flex items-center justify-center text-rose-600 shadow-sm text-sm" title={`Score Weight: ${item.score_weight || 'N/A'}`}>✕</span>
-                                      )}
-                                    </div>
+                                    )}
+                                    <p className="text-xs text-slate-800 font-medium">{item.value}</p>
                                   </div>
-                                  {(item.policy_text && item.policy_text !== "N/A" && item.policy_text !== "Not Explicitly Mentioned") && (
-                                    <div className={`mt-3 p-3 rounded-lg border text-xs italic border-l-2 ${item.status === "Positive"
-                                      ? "bg-amber-50/80 border-amber-200 text-amber-800 border-l-amber-400"
-                                      : "bg-slate-100/50 border-slate-100/50 text-slate-600 border-l-slate-300"
-                                      }`}>
-                                      <span className={`font-bold not-italic mr-1 ${item.status === "Positive" ? "text-amber-700" : "text-slate-500"}`}>Policy Extract:</span>
-                                      "{item.policy_text}"
-                                    </div>
-                                  )}
-                                  
-                                  {/* [NEW] Restore Benefit Specific Educational Card */}
-                                  {item.feature === 'Restoration Benefit' && (
-                                    <RestoreBenefitDetailsCard value={item.value} policyText={item.policy_text} />
-                                  )}
+                                  <div className="shrink-0 ml-4">
+                                    {item.status === "Positive" ? (
+                                      <span className="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-600 shadow-sm text-lg" title={`Score Weight: ${item.score_weight || 'N/A'}`}>✓</span>
+                                    ) : (
+                                      <span className="w-8 h-8 rounded-full bg-rose-100 flex items-center justify-center text-rose-600 shadow-sm text-sm" title={`Score Weight: ${item.score_weight || 'N/A'}`}>✕</span>
+                                    )}
+                                  </div>
                                 </div>
-                              ))}
-                            </div>
+                                {(item.policy_text && item.policy_text !== "N/A" && item.policy_text !== "Not Explicitly Mentioned") && (
+                                  <div className={`mt-3 p-3 rounded-lg border text-xs italic border-l-2 ${item.status === "Positive"
+                                    ? "bg-amber-50/80 border-amber-200 text-amber-800 border-l-amber-400"
+                                    : "bg-slate-100/50 border-slate-100/50 text-slate-600 border-l-slate-300"
+                                    }`}>
+                                    <span className={`font-bold not-italic mr-1 ${item.status === "Positive" ? "text-amber-700" : "text-slate-500"}`}>Policy Extract:</span>
+                                    "{item.policy_text}"
+                                  </div>
+                                )}
+
+                                {/* [NEW] Restore Benefit Specific Educational Card */}
+                                {item.feature === 'Restoration Benefit' && (
+                                  <RestoreBenefitDetailsCard value={item.value} policyText={item.policy_text} />
+                                )}
+                              </div>
+                            ))}
+                          </div>
                         </div>
                       );
                     });
@@ -1437,94 +1435,94 @@ export default function Analyzer({ session, fullName }) {
                   </div>
                 ) : (
                   <>
-                <h4 className="font-bold text-2xl text-slate-800 ml-1 border-l-8 border-blue-600 pl-4">
-                  Top Recommendations for {getTargetName(policy) === 'You' ? 'You' : getTargetName(policy)}
-                </h4>
+                    <h4 className="font-bold text-2xl text-slate-800 ml-1 border-l-8 border-blue-600 pl-4">
+                      Top Recommendations for {getTargetName(policy) === 'You' ? 'You' : getTargetName(policy)}
+                    </h4>
 
-                {/* Flatten all recommendations into a single list to guarantee horizontal layout */}
-                {(() => {
-                  const allItems = report.recommendations?.flatMap(cat => cat.items || []) || [];
-                  return (
-                    <div className="space-y-6 print:space-y-3">
-                      {/* Use the first category name as a sub-header if available, or generic */}
-                      <h5 className="font-bold text-sm uppercase tracking-wider text-slate-500 bg-slate-100 inline-block px-3 py-1 rounded-lg">
-                        {report.recommendations?.[0]?.category || "Recommended Plans"}
-                      </h5>
+                    {/* Flatten all recommendations into a single list to guarantee horizontal layout */}
+                    {(() => {
+                      const allItems = report.recommendations?.flatMap(cat => cat.items || []) || [];
+                      return (
+                        <div className="space-y-6 print:space-y-3">
+                          {/* Use the first category name as a sub-header if available, or generic */}
+                          <h5 className="font-bold text-sm uppercase tracking-wider text-slate-500 bg-slate-100 inline-block px-3 py-1 rounded-lg">
+                            {report.recommendations?.[0]?.category || "Recommended Plans"}
+                          </h5>
 
-                      <div className="grid grid-cols-3 gap-6 print:gap-3">
-                        {allItems.map((item, j) => (
-                          <div key={j} className="bg-white p-6 rounded-2xl border border-slate-100 shadow-lg hover:shadow-2xl hover:-translate-y-1 transition-all duration-300 relative overflow-hidden group flex flex-col h-full break-inside-avoid print:p-3 print:rounded-lg">
-                            <div className="absolute top-0 right-0 bg-gradient-to-l from-blue-600 to-blue-500 text-white text-[10px] font-bold px-3 py-1.5 rounded-bl-xl shadow-md opacity-90 group-hover:opacity-100 transition">
-                              SHARE INDIA PARTNER
-                            </div>
-                            <div className="mb-4 mt-2">
-                              <h6 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">{item.company}</h6>
-                              <h5 className="font-bold text-lg text-slate-900 leading-tight mb-2">{item.name}</h5>
-                              <span className="text-[10px] font-bold bg-blue-50 text-blue-600 px-2 py-1 rounded border border-blue-100 uppercase tracking-wide">{item.type}</span>
-                            </div>
-
-                            {item.description && item.description.includes(';') ? (
-                              <ul className="text-sm text-slate-600 leading-relaxed mb-4 border-b border-slate-50 pb-4 print:text-xs print:mb-2 print:pb-2 list-disc pl-4 space-y-1">
-                                {item.description.replace(/^USP:\s*/i, '').split(';').map((point, k) => (
-                                  point.trim() && <li key={k}>{point.trim()}</li>
-                                ))}
-                              </ul>
-                            ) : (
-                              <p className="text-sm text-slate-600 leading-relaxed mb-4 border-b border-slate-50 pb-4 print:text-xs print:mb-2 print:pb-2">{item.description}</p>
-                            )}
-
-                            {/* Product Score Display */}
-                            {item.product_score && (
-                              <div className="flex items-center gap-2 mb-4 bg-slate-50 p-2 rounded-lg border border-slate-100 w-fit">
-                                <div className="relative w-8 h-8 flex items-center justify-center">
-                                  <svg className="w-full h-full transform -rotate-90">
-                                    <circle cx="16" cy="16" r="14" stroke="currentColor" strokeWidth="3" fill="transparent" className="text-slate-200" />
-                                    <circle cx="16" cy="16" r="14" stroke="currentColor" strokeWidth="3" fill="transparent" strokeDasharray={87.96} strokeDashoffset={87.96 - (87.96 * (item.product_score / 10))} className={`${item.product_score >= 8 ? 'text-emerald-500' : 'text-blue-500'}`} strokeLinecap="round" />
-                                  </svg>
-                                  <span className="absolute text-[9px] font-bold text-slate-700">{item.product_score}</span>
+                          <div className="grid grid-cols-3 gap-6 print:gap-3">
+                            {allItems.map((item, j) => (
+                              <div key={j} className="bg-white p-6 rounded-2xl border border-slate-100 shadow-lg hover:shadow-2xl hover:-translate-y-1 transition-all duration-300 relative overflow-hidden group flex flex-col h-full break-inside-avoid print:p-3 print:rounded-lg">
+                                <div className="absolute top-0 right-0 bg-gradient-to-l from-blue-600 to-blue-500 text-white text-[10px] font-bold px-3 py-1.5 rounded-bl-xl shadow-md opacity-90 group-hover:opacity-100 transition">
+                                  SHARE INDIA PARTNER
                                 </div>
-                                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-tight">Product Score</span>
-                              </div>
-                            )}
+                                <div className="mb-4 mt-2">
+                                  <h6 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">{item.company}</h6>
+                                  <h5 className="font-bold text-lg text-slate-900 leading-tight mb-2">{item.name}</h5>
+                                  <span className="text-[10px] font-bold bg-blue-50 text-blue-600 px-2 py-1 rounded border border-blue-100 uppercase tracking-wide">{item.type}</span>
+                                </div>
 
-                            <div className="mt-4 mb-4 grid grid-cols-3 gap-2">
-                              <div className="bg-slate-50 p-2 rounded-xl border border-slate-100 text-center print:p-1">
-                                <span className="block text-[8px] font-bold text-slate-400 uppercase tracking-widest text-nowrap">Claims Paid</span>
-                                <span className="block text-sm font-black text-slate-700 print:text-xs">{item.stats?.csr || "N/A"}</span>
-                                <span className="block text-[9px] font-bold text-blue-600 mt-1 uppercase tracking-wide">Rank: {item.stats?.csr_rank || "-"}</span>
-                              </div>
-                              <div className="bg-slate-50 p-2 rounded-xl border border-slate-100 text-center print:p-1">
-                                <span className="block text-[8px] font-bold text-slate-400 uppercase tracking-widest text-nowrap">Solvency</span>
-                                <span className="block text-sm font-black text-slate-700 print:text-xs">{item.stats?.solvency || "N/A"}</span>
-                                <span className="block text-[9px] font-bold text-purple-600 mt-1 uppercase tracking-wide">Rank: {item.stats?.solvency_rank || "-"}</span>
-                              </div>
-                              <div className="bg-slate-50 p-2 rounded-xl border border-slate-100 text-center print:p-1">
-                                <span className="block text-[8px] font-bold text-slate-400 uppercase tracking-widest text-nowrap">Complaints</span>
-                                <span className="block text-sm font-black text-slate-700 print:text-xs">{item.stats?.complaints || "N/A"}</span>
-                                <span className="block text-[9px] font-bold text-emerald-600 mt-1 uppercase tracking-wide">Rank: {item.stats?.complaints_rank || "-"}</span>
-                              </div>
-                            </div>
+                                {item.description && item.description.includes(';') ? (
+                                  <ul className="text-sm text-slate-600 leading-relaxed mb-4 border-b border-slate-50 pb-4 print:text-xs print:mb-2 print:pb-2 list-disc pl-4 space-y-1">
+                                    {item.description.replace(/^USP:\s*/i, '').split(';').map((point, k) => (
+                                      point.trim() && <li key={k}>{point.trim()}</li>
+                                    ))}
+                                  </ul>
+                                ) : (
+                                  <p className="text-sm text-slate-600 leading-relaxed mb-4 border-b border-slate-50 pb-4 print:text-xs print:mb-2 print:pb-2">{item.description}</p>
+                                )}
 
-                            <div className="mt-4 mb-6 print:mt-2 print:mb-2">
-                              <span className="text-xs font-bold text-emerald-600 block mb-2 uppercase tracking-wide">✅ BENEFITS</span>
-                              <ul className="text-sm space-y-2 text-slate-600 print:text-xs print:space-y-1">
-                                {item.benefits?.map((b, k) => <li key={k} className="leading-snug flex gap-1.5"><span className="text-emerald-500">•</span> {b}</li>)}
-                              </ul>
-                            </div>
+                                {/* Product Score Display */}
+                                {item.product_score && (
+                                  <div className="flex items-center gap-2 mb-4 bg-slate-50 p-2 rounded-lg border border-slate-100 w-fit">
+                                    <div className="relative w-8 h-8 flex items-center justify-center">
+                                      <svg className="w-full h-full transform -rotate-90">
+                                        <circle cx="16" cy="16" r="14" stroke="currentColor" strokeWidth="3" fill="transparent" className="text-slate-200" />
+                                        <circle cx="16" cy="16" r="14" stroke="currentColor" strokeWidth="3" fill="transparent" strokeDasharray={87.96} strokeDashoffset={87.96 - (87.96 * (item.product_score / 10))} className={`${item.product_score >= 8 ? 'text-emerald-500' : 'text-blue-500'}`} strokeLinecap="round" />
+                                      </svg>
+                                      <span className="absolute text-[9px] font-bold text-slate-700">{item.product_score}</span>
+                                    </div>
+                                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-tight">Product Score</span>
+                                  </div>
+                                )}
 
-                            {/* [NEW] Compare Button */}
-                            <button
-                              onClick={() => setComparingItem(item)}
-                              className="w-full mt-auto bg-white border-2 border-slate-900 text-slate-900 py-2 rounded-xl font-bold uppercase text-xs tracking-widest hover:bg-slate-900 hover:text-white transition print:py-1 print:text-[10px]"
-                            >
-                              Compare
-                            </button>
+                                <div className="mt-4 mb-4 grid grid-cols-3 gap-2">
+                                  <div className="bg-slate-50 p-2 rounded-xl border border-slate-100 text-center print:p-1">
+                                    <span className="block text-[8px] font-bold text-slate-400 uppercase tracking-widest text-nowrap">Claims Paid</span>
+                                    <span className="block text-sm font-black text-slate-700 print:text-xs">{item.stats?.csr || "N/A"}</span>
+                                    <span className="block text-[9px] font-bold text-blue-600 mt-1 uppercase tracking-wide">Rank: {item.stats?.csr_rank || "-"}</span>
+                                  </div>
+                                  <div className="bg-slate-50 p-2 rounded-xl border border-slate-100 text-center print:p-1">
+                                    <span className="block text-[8px] font-bold text-slate-400 uppercase tracking-widest text-nowrap">Solvency</span>
+                                    <span className="block text-sm font-black text-slate-700 print:text-xs">{item.stats?.solvency || "N/A"}</span>
+                                    <span className="block text-[9px] font-bold text-purple-600 mt-1 uppercase tracking-wide">Rank: {item.stats?.solvency_rank || "-"}</span>
+                                  </div>
+                                  <div className="bg-slate-50 p-2 rounded-xl border border-slate-100 text-center print:p-1">
+                                    <span className="block text-[8px] font-bold text-slate-400 uppercase tracking-widest text-nowrap">Complaints</span>
+                                    <span className="block text-sm font-black text-slate-700 print:text-xs">{item.stats?.complaints || "N/A"}</span>
+                                    <span className="block text-[9px] font-bold text-emerald-600 mt-1 uppercase tracking-wide">Rank: {item.stats?.complaints_rank || "-"}</span>
+                                  </div>
+                                </div>
+
+                                <div className="mt-4 mb-6 print:mt-2 print:mb-2">
+                                  <span className="text-xs font-bold text-emerald-600 block mb-2 uppercase tracking-wide">✅ BENEFITS</span>
+                                  <ul className="text-sm space-y-2 text-slate-600 print:text-xs print:space-y-1">
+                                    {item.benefits?.map((b, k) => <li key={k} className="leading-snug flex gap-1.5"><span className="text-emerald-500">•</span> {b}</li>)}
+                                  </ul>
+                                </div>
+
+                                {/* [NEW] Compare Button */}
+                                <button
+                                  onClick={() => setComparingItem(item)}
+                                  className="w-full mt-auto bg-white border-2 border-slate-900 text-slate-900 py-2 rounded-xl font-bold uppercase text-xs tracking-widest hover:bg-slate-900 hover:text-white transition print:py-1 print:text-[10px]"
+                                >
+                                  Compare
+                                </button>
+                              </div>
+                            ))}
                           </div>
-                        ))}
-                      </div>
-                    </div>
-                  );
-                })()}
+                        </div>
+                      );
+                    })()}
                   </>
                 )}
               </div>

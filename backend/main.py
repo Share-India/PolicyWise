@@ -2323,6 +2323,16 @@ async def chat_with_report(data: dict, user: dict = Depends(get_current_user)):
         policy_data = data.get("policy", {})
         report_data = data.get("report", {})
         chat_history = data.get("history", [])
+        analysis_id = data.get("analysis_id")
+
+        if analysis_id and (not policy_data or not report_data):
+            try:
+                res = supabase_client.table("policy_analyses").select("extracted_data, report_data").eq("id", analysis_id).single().execute()
+                if res.data:
+                    policy_data = policy_data or res.data.get("extracted_data", {})
+                    report_data = report_data or res.data.get("report_data", {})
+            except Exception as e:
+                print(f"Failed to fetch analysis data for chat: {e}")
 
         if not user_message:
             raise HTTPException(status_code=400, detail="Message is required.")
